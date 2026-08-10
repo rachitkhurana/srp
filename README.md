@@ -157,16 +157,63 @@ srp --plan ./plan.js
 ```
 
 Both `.cjs`/CommonJS and `.mjs`/ESM files work, with a default export or named exports. A plan file
-can set any option; a flag you actually type on the command line still wins.
+can set any option (in kebab or camel case) except `help`, `version`, `plan` and `script`; a flag you
+actually type on the command line still wins.
+
+### Timeline steps
+
+A step is either a scroll or a hold, never both. These are all the keys it takes:
+
+| Key | On | Meaning |
+|---|---|---|
+| `scrollTo` | scroll | Where to scroll to. Required. Takes any target (`40%`, `#pricing`, `bottom`) |
+| `hold` | hold | How long to hold, in seconds. This *is* the length, so do not also pass `duration` |
+| `at` | hold | Where to hold. Omit it to hold wherever the previous step ended, which is usual |
+| `duration` | scroll | Seconds. Omit it to share the top-level `duration` budget with the other open-ended steps, split in proportion to distance travelled |
+| `action` | either | `async (page, ctx) => {}`, fired on one frame of this step |
+| `actionAt` | either | `'start'` (default) or `'end'`: the step's first or last frame |
+| `label` | either | Shown in `--dry-run` and in log lines |
+
+### The hook context
+
+Hooks are called `fn(page, ctx)`. `page` is a real Playwright `Page`. `ctx` carries:
+
+| Field | |
+|---|---|
+| `ctx.page` | The same `Page` |
+| `ctx.viewport` | `{ width, height }` |
+| `ctx.maxScroll` | Scrollable extent in px (still `0` during `before`) |
+| `ctx.frame` | `undefined` in `before`/`after`; in an action, `{ index, total, tMs, y, progress }` |
+| `ctx.clock.paused()` | Whether page time is currently frozen |
+| `ctx.clock.nowMs()` | Page time for this frame, or `null` if not frozen |
+| `ctx.sleep(ms)` | Advance page time. See below |
+| `ctx.log(msg)` | Print a line under the current step's label |
 
 **Inside a hook, use `ctx.sleep(ms)`, not `page.waitForTimeout(ms)`.** During capture the page clock
 is frozen, so `waitForTimeout` burns real seconds while the page sits still, and an in-page
-`setTimeout` never fires at all. `ctx.sleep` advances page time instead. Hooks get `(page, ctx)`,
-where `ctx` carries `frame`, `viewport`, `maxScroll`, `sleep` and `log`.
+`setTimeout` never fires at all. `ctx.sleep` advances page time instead, without spending video
+frames on it: if you want to *watch* something play, give the step a longer `hold`.
 
 A failing per-frame action warns and carries on, because losing a whole render to a decorative click
 is worse than the click. `--strict-hooks` makes it abort instead. A failing `before`/`after` always
 aborts, and the partial video is removed.
+
+### Worked examples
+
+Every file in [`examples/`](examples/) is loaded and validated by the test suite, so none of them can
+drift out of sync with the validator. Copy one and cut it down.
+
+| File | What it shows |
+|---|---|
+| [`basic.hooks.cjs`](examples/basic.hooks.cjs) | The smallest `--script` file |
+| [`basic.hooks.mjs`](examples/basic.hooks.mjs) | The same thing as an ES module |
+| [`basic.plan.cjs`](examples/basic.plan.cjs) | The smallest `--plan` file |
+| [`reference.plan.cjs`](examples/reference.plan.cjs) | Every supported key, annotated |
+| [`recipes.plan.cjs`](examples/recipes.plan.cjs) | The patterns worth copying, each with its reasoning |
+| [`uh-ring.plan.cjs`](examples/uh-ring.plan.cjs) | A real one: replay a hero animation, hold, then scroll a 22000px page |
+
+Your own files go in [`hooks/`](hooks/), which is git-ignored so scratch work never shows up in
+`git status`.
 
 ---
 
@@ -266,6 +313,10 @@ selector, build the frame schedule, freeze the clock, capture, `after` hook, enc
   rate. That is correct for frame stepping, but worth knowing if a page counts intervals.
 - **Output is exactly the viewport size.** `deviceScaleFactor` is `1`, so `1920x1080` in gives
   `1920x1080` out. Retina capture is not wired up yet.
+- **Two runs can differ by a thin halo.** An element Chromium has promoted to its own compositor
+  layer rasterises edge antialiasing slightly differently depending on whether it is still on that
+  layer at screenshot time, which is settled at page load. It is worth about a hundred pixels and it
+  is never a difference in animation phase, which stays exact to the millisecond.
 - **MP4 vs WebM.** MP4/H.264 (`yuv420p`, `+faststart`) plays everywhere; WebM/VP9 is smaller. Pick
   with the `--out` extension.
 
@@ -295,3 +346,7 @@ Source layout, starting at `src/cli.js`:
 | `src/recorder.js` | The frame loop. |
 
 `record-scroll.js` is kept as a back-compat entry point.
+
+[`AGENTS.md`](AGENTS.md) is the playbook for coding agents: how to drive srp, and the invariants to
+respect before changing `src/`. Several of them fail silently or hang rather than erroring, so it is
+worth reading before touching the capture path.

@@ -2,10 +2,14 @@
 node_modules/
 
 # recorded output
-output/
+output/*
 *.mp4
 *.webm
 *.png
+
+# your own hook and plan files; the shipped examples live in examples/
+hooks/*
+!hooks/README.md
 
 # os cruft
 .DS_Store

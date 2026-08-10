@@ -12,8 +12,10 @@
   "files": [
     "bin",
     "src",
+    "examples",
     "record-scroll.js",
-    "README.md"
+    "README.md",
+    "AGENTS.md"
   ],
   "scripts": {
     "record": "node bin/srp.js",
