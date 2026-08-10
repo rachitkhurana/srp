@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # postinstall already downloads Chromium; --with-deps adds the system
+      # libraries headless Chromium needs on a bare runner.
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run test:all
+
+      # The e2e writes to a temp dir and cleans up, so anything left behind in
+      # the working tree is a bug.
+      - name: working tree is clean
+        run: git diff --exit-code

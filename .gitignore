@@ -2,8 +2,10 @@
 node_modules/
 
 # recorded output
+output/
 *.mp4
 *.webm
+*.png
 
 # os cruft
 .DS_Store

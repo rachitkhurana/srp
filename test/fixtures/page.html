@@ -1,0 +1,78 @@
+<meta charset="utf-8">
+<title>srp fixture</title>
+<style>
+  /* Deterministic geometry: 4 x 500px = exactly 2000px of document height,
+     no lazy loading, no web fonts, no network. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font: 16px/1.4 monospace; }
+
+  section {
+    height: 500px;
+    color: #fff;
+    padding: 24px;
+    /* Stripes guarantee that ANY 1px scroll delta changes pixels, so a
+       "every frame is unique" assertion actually tests the scroll. */
+    background-image: repeating-linear-gradient(
+      180deg, rgba(0,0,0,.18) 0 8px, rgba(0,0,0,0) 8px 17px);
+  }
+  #hero     { background-color: #e11d48; }
+  #features { background-color: #0ea5e9; }
+  #pricing  { background-color: #22c55e; }
+  #footer   { background-color: #f59e0b; }
+
+  /* Fixed HUD so every frame carries the animation + probe state. */
+  #hud {
+    position: fixed; inset: 0 0 auto 0; z-index: 10;
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px; background: #111; color: #eee;
+  }
+
+  /* 1. Plain CSS keyframe animation on the document timeline.
+        page.clock does NOT control this; the WAAPI pass must. */
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  #spinner { width: 28px; height: 28px; background: #fff; animation: spin 4s linear infinite; }
+
+  /* 2. Scroll-driven animation. Its timeline is a ScrollTimeline, NOT
+        document.timeline, so the freezer must SKIP it or this bar dies. */
+  @keyframes grow { from { width: 0%; } to { width: 100%; } }
+  #scrollbar-track { flex: 1; height: 10px; background: #333; }
+  #scrollbar-fill {
+    height: 100%; background: #fff;
+    animation: grow linear both;
+    animation-timeline: scroll();
+  }
+
+  /* 3. A CSS transition, triggered by a hook adding .on. */
+  #box { width: 40px; height: 20px; background: #666; transition: transform 2s linear; }
+  #box.on { transform: translateX(120px); }
+</style>
+
+<div id="hud">
+  <div id="spinner"></div>
+  <!-- srp writes this element's text into frames.json when --dump-frames is set. -->
+  <div data-srp-probe id="probe">t=-1</div>
+  <div id="scrollbar-track"><div id="scrollbar-fill"></div></div>
+  <div id="box"></div>
+  <button id="tab-2" type="button">tab 2</button>
+</div>
+
+<section id="hero">hero</section>
+<section id="features">features</section>
+<section id="pricing">pricing</section>
+<section id="footer">footer</section>
+
+<script>
+  // 4. A rAF loop. page.clock DOES control this, so under a paused clock the
+  //    printed timestamp must be exactly the frame time we asked for.
+  // The ABSOLUTE timestamp, not one relative to load: under a frame-locked
+  // clock it must read exactly base + frame time, which the tests assert.
+  const probe = document.getElementById('probe');
+  requestAnimationFrame(function tick(ts) {
+    probe.textContent = 't=' + Math.round(ts);
+    requestAnimationFrame(tick);
+  });
+
+  document.getElementById('tab-2').addEventListener('click', () => {
+    document.getElementById('box').classList.add('on');
+  });
+</script>

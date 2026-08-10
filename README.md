@@ -1,89 +1,233 @@
 # srp
 
-*screen record playwright* — record a **perfectly smooth, dead-linear scroll** of any webpage to an
-MP4 or WebM video.
+*screen record playwright*: record a **perfectly smooth, dead-linear scroll** of any webpage to an
+MP4 or WebM video, pausing wherever you like and running your own Playwright code mid-capture.
 
-Built for capturing marketing pages, portfolios, and scroll-driven animations cleanly — no jitter,
-no dropped frames, exact duration every time.
+Built for capturing marketing pages, portfolios and scroll-driven animations cleanly. No jitter, no
+dropped frames, exact duration every time, and animation that plays at the same speed on every run
+regardless of how fast the machine is.
 
 ---
 
 ## Why it's smooth
 
-It does **not** screen-record in real time (which drops/duplicates frames whenever the page hitches).
-Instead it captures **deterministically**:
+It does **not** screen-record in real time (which drops or duplicates frames whenever the page
+hitches). Instead it captures **deterministically**:
 
-1. It computes the exact scroll position for every output frame (`600 frames = 10s × 60fps`).
-2. It sets that scroll position, waits for the browser to paint, and screenshots it.
-3. It pipes the frames straight into **ffmpeg** at a hard-locked 60fps.
+1. It computes the exact scroll position for every output frame (`600 frames = 10s at 60fps`).
+2. It sets that position, advances page time by exactly one frame, waits for the browser to paint,
+   and screenshots.
+3. It pipes the frames straight into **ffmpeg** at a hard-locked frame rate.
 
-Because the scroll offset is a pure linear function of the frame index, the motion has **zero easing
-and zero jitter by construction**. Capture is decoupled from wall-clock time, so a slow machine just
-takes longer to render — the output is always a flawless, exact-length clip.
+Because the scroll offset is a pure function of the frame index, the motion has **zero jitter by
+construction**. And because page time is driven one frame at a time rather than read off the wall
+clock, animations play at their real speed no matter how slow the machine is.
 
 ---
 
 ## Requirements
 
-- **Node 18+** (uses the built-in `util.parseArgs`)
-- That's it. **ffmpeg ships bundled** via `ffmpeg-static` — no system install needed.
-
----
+- **Node 20+**
+- That's it. **ffmpeg ships bundled** via `ffmpeg-static`, so no system install is needed.
 
 ## Install
 
 ```bash
 cd srp
-npm install          # installs playwright + ffmpeg-static, and downloads Chromium
+npm install          # playwright + ffmpeg-static, and downloads Chromium
+npm link             # optional: puts `srp` on your PATH
 ```
 
-> `npm install` runs `playwright install chromium` automatically. If it's ever missing, run
-> `npx playwright install chromium` yourself.
+`npm install` runs `playwright install chromium` for you. If it ever goes missing, run
+`npx playwright install chromium`.
 
 ---
 
 ## Usage
 
 ```bash
-node record-scroll.js [url] [duration] [options]
-# or with flags:
-node record-scroll.js --url <url> --duration <seconds> [options]
+srp [url] [duration] [options]
+srp --url <url> --duration <seconds> [options]
+
+# without npm link:
+node bin/srp.js [url] [duration] [options]
 ```
 
-The video is written to your **current working directory** (where you run the command).
-
-### Options
-
-| Option | Default | Description |
-|---|---|---|
-| `url` *(positional)* / `--url` | `http://localhost:3000` | Page to record. A bare host like `localhost:5173` is auto-prefixed with `http://`. |
-| `duration` *(positional)* / `-d, --duration` | `10` | Seconds. This is **both** the top→bottom scroll time **and** the final video length. |
-| `-o, --out` | `scroll.mp4` | Output file. `.mp4` → H.264, `.webm` → VP9. |
-| `--fps` | `60` | Output frame rate (locked). |
-| `--width` | `1920` | Viewport width (rounded to an even number). |
-| `--height` | `1080` | Viewport height (rounded to an even number). |
-| `--wait` | `3` | Seconds to settle after load, before capture. |
-| `--no-warmup` | *(off)* | Skip the pre-scroll that loads lazy content. Faster, but can clip footers on heavy pages. |
-| `--headed` | *(off)* | Show the browser window instead of running headless. |
-| `-h, --help` | | Print the option list. |
-
-Any argument you omit falls back to its default.
-
-### Examples
+The video is written relative to your current working directory.
 
 ```bash
 # Local dev server, 15-second scroll
-node record-scroll.js http://localhost:3000 15
+srp http://localhost:3000 15
 
-# A live site to WebM, 8 seconds
-node record-scroll.js --url https://rachitkay.com --duration 8 --out hero.webm
+# A live site to WebM
+srp --url https://rachitkay.com --duration 8 --out hero.webm
 
-# Bare host + watch it happen live
-node record-scroll.js localhost:5173 12 --headed
-
-# Simple static page — skip warm-up for a faster run
-node record-scroll.js ./index.html 6 --no-warmup
+# A local file, watched live in a real browser window
+srp ./index.html 6 --headed
 ```
+
+---
+
+## Pausing
+
+Hold the scroll at a point so an animation can play out. Targets can be a percentage, a pixel
+offset, a CSS selector, or `top` / `bottom`:
+
+```bash
+srp https://site.com 10 --pause 40%:2 --pause '#pricing:1.5' --pause bottom:1
+```
+
+By default **pauses extend the video**: `--duration` is the scroll-motion time, so the example above
+is `10 + 2 + 1.5 + 1 = 14.5s`. Pass `--fixed-duration` to make `--duration` a hard total instead,
+compressing the scroll to make room for the holds.
+
+Scroll time is shared between the legs in proportion to distance travelled, so a pause at 90% gets a
+long first leg and a short last one, not two equal halves.
+
+Selector targets take modifiers behind an `@`, so a selector that happens to end in a number is
+never misread:
+
+| Target | Means |
+|---|---|
+| `40%` | 40% of the scrollable extent |
+| `1200px` or `1200` | absolute pixels |
+| `top` / `bottom` | 0% / 100% |
+| `#pricing` | scroll that element to the top of the viewport |
+| `#hero@center` | centre it in the viewport instead |
+| `#hero@+120` | 120px further down |
+| `#hero@center-40` | both |
+
+Check what you are going to get without recording anything:
+
+```bash
+$ srp https://site.com 10 --pause 50%:2 --dry-run
+  extent 1760px · 12s total (10s scroll + 2s held) · 60fps · 720 frames
+   0  scroll  0 -> 880px       5s      frames 0..299 (300)
+   1  hold    hold @ 880px     2s      frames 300..419 (120)
+   2  scroll  880 -> 1760px    5s      frames 420..719 (300)
+```
+
+---
+
+## Running your own code
+
+`--script` takes a file exporting `before` and `after` hooks. They get Playwright's `page`, so they
+can do anything Playwright can:
+
+```js
+// hooks.js
+module.exports = {
+  before: async (page) => page.click('#accept-cookies'),
+  after:  async (page) => page.hover('.cta'),
+};
+```
+
+```bash
+srp https://site.com 10 --script ./hooks.js --pause 40%:2
+```
+
+`before` runs after load but **before** the settle wait, the warm-up pass and measurement, so
+dismissing a modal or expanding an accordion reflows the page before any geometry is read.
+
+For full control, `--plan` takes a file that describes the whole timeline. Steps run in order, and
+any step can carry an `action` that fires on its first frame (or its last, with `actionAt: 'end'`):
+
+```js
+// plan.js
+module.exports = {
+  url: 'https://site.com',
+  out: 'demo.mp4',
+
+  before: async (page) => page.click('#accept-cookies'),
+
+  timeline: [
+    { scrollTo: '#hero',     duration: 2 },
+    { hold: 1.5, action: async (page) => page.click('.tab-2') },
+    { scrollTo: '#pricing',  duration: 3 },
+    { hold: 1 },
+    { scrollTo: '100%',      duration: 4 },
+  ],
+
+  after: async (page) => page.screenshot({ path: 'last.png' }),
+};
+```
+
+```bash
+srp --plan ./plan.js
+```
+
+Both `.cjs`/CommonJS and `.mjs`/ESM files work, with a default export or named exports. A plan file
+can set any option; a flag you actually type on the command line still wins.
+
+**Inside a hook, use `ctx.sleep(ms)`, not `page.waitForTimeout(ms)`.** During capture the page clock
+is frozen, so `waitForTimeout` burns real seconds while the page sits still, and an in-page
+`setTimeout` never fires at all. `ctx.sleep` advances page time instead. Hooks get `(page, ctx)`,
+where `ctx` carries `frame`, `viewport`, `maxScroll`, `sleep` and `log`.
+
+A failing per-frame action warns and carries on, because losing a whole render to a decorative click
+is worse than the click. `--strict-hooks` makes it abort instead. A failing `before`/`after` always
+aborts, and the partial video is removed.
+
+---
+
+## Deterministic time
+
+Frame-by-frame capture takes roughly 30ms of real time per frame but each frame represents 1/fps of
+video, so anything the page animates on its own runs at the wrong speed. A hold is the worst case:
+the scroll stops, but the animation keeps crawling at whatever rate the machine happens to
+screenshot. srp fixes this in two places, both on by default:
+
+- **`page.clock`** drives everything JavaScript-timed: `requestAnimationFrame`, `setTimeout`,
+  `setInterval`, `Date.now`, `performance.now`. GSAP and friends land here.
+- **The Web Animations API** drives CSS keyframe animations and transitions, which live on the
+  compositor's own timeline and are completely untouched by `page.clock`.
+
+Scroll-driven CSS (`animation-timeline: scroll()`) is deliberately left alone, since it is already
+frame-locked by the scroll position and freezing it would kill the exact effect you are recording.
+
+By default an animation already running when capture starts keeps its phase. `--restart-animations`
+starts everything from zero on frame 0, so two runs put every animation at exactly the same point on
+every frame.
+
+How exact is "the same"? Frame timing is exact: on any run, frame `i` is rendered at page time
+`i * 1000/fps`, to the millisecond. Pixels are byte-identical for content that is a pure function of
+scroll position. They are not *quite* byte-identical for an element Chromium has promoted to its own
+compositor layer: whether it is still on that layer at screenshot time is settled at page load, and
+the two paths rasterise edge antialiasing a shade differently. That shows up as a thin halo worth a
+hundred-odd pixels, never as a difference in animation phase.
+
+If a page misbehaves with faked timers (a consent SDK that polls, a video player that uses
+`performance.now` for buffering), fall back with `--no-clock`. Everything else still works.
+
+---
+
+## Options
+
+| Option | Default | Description |
+|---|---|---|
+| `url` *(positional)* / `--url` | `http://localhost:3000` | Page to record. A bare host like `localhost:5173` gets `http://`; a path like `./index.html` becomes a `file://` URL. |
+| `duration` *(positional)* / `-d`, `--duration` | `10` | Scroll-motion seconds. Pauses add on top unless `--fixed-duration`. |
+| `--fixed-duration` | *(off)* | Make `--duration` the hard total and compress the scroll to fit the pauses. |
+| `--pause <target>:<sec>` | | Hold at a point. Repeatable. |
+| `--plan <file>` | | A `.js` file exporting `{ timeline, before, after }`. |
+| `--script <file>` | | A `.js` file exporting `{ before, after }`. |
+| `--hook-timeout <sec>` | `15` | Give up on a hook that has not returned in this long. |
+| `--strict-hooks` | *(off)* | Abort on a failing per-frame action instead of warning. |
+| `-o`, `--out <file>` | `scroll.mp4` | Output file. `.mp4` gives H.264, `.webm` gives VP9. |
+| `--fps <n>` | `60` | Output frame rate (locked). |
+| `--width <px>` | `1920` | Viewport width (rounded to an even number). |
+| `--height <px>` | `1080` | Viewport height (rounded to an even number). |
+| `--wait <sec>` | `3` | Settle time after load, before capture. `0` is allowed. |
+| `--no-warmup` | *(off)* | Skip the pre-scroll that loads lazy content. Faster, but can clip footers. |
+| `--headed` | *(off)* | Show the browser window instead of running headless. |
+| `--no-clock` | *(off)* | Record at wall-clock time instead of frame-locking page time. |
+| `--css <waapi\|off>` | `waapi` | Frame-lock CSS keyframes and transitions too. |
+| `--restart-animations` | *(off)* | Start every CSS animation from 0 on frame 0. |
+| `--shadow-animations` | *(off)* | Also freeze animations inside shadow roots (walks the DOM every frame). |
+| `--dry-run` | *(off)* | Measure the page and print the frame schedule without recording. |
+| `--dump-frames <dir>` | | Also write every frame as a PNG plus a `frames.json`, for debugging. |
+| `-h`, `--help` | | Print the option list. |
+| `--version` | | Print the version. |
 
 ---
 
@@ -91,42 +235,63 @@ node record-scroll.js ./index.html 6 --no-warmup
 
 ```
 ▶ Recording https://your-site.com
-  1920x1080 · 60fps · 10s scroll · 600 frames
+  1920x1080 · 60fps
   waiting 3s for the page to settle…
   warming up (loading lazy content so the footer is not clipped)…
-  scroll extent: 12000px (page grew ~600px during warm-up)
+  scroll extent: 12000px (page grew 600px during warm-up)
+  12s · 720 frames (2s held)
   capturing frames…
-  frame 600/600
+  frame 720/720
 ✔ Saved /path/to/scroll.mp4
 ```
 
-Steps: **load → wait (`--wait`) → warm-up scroll (loads lazy content) → measure the stable page height
-→ deterministic frame capture → ffmpeg encode.**
+Load, `before` hook, settle (`--wait`), warm-up scroll, measure the stable height, resolve every
+selector, build the frame schedule, freeze the clock, capture, `after` hook, encode.
 
 ---
 
-## Notes & troubleshooting
+## Notes and troubleshooting
 
-- **Footer / bottom gets clipped?** Heavy pages lazy-load content as you scroll into it, so the page
-  grows taller mid-scroll. The **warm-up pass** (on by default) scrolls through once to trigger all of
-  it *before* measuring, so the scroll reaches the true bottom. If a page is still growing after
-  warm-up, the run prints a warning — bump `--wait`.
-- **Capture isn't real-time.** A 10s clip takes a couple of minutes to render (it's 600 screenshots).
-  This is expected and is *why* the motion is perfect — the output is always exactly `duration` long.
-- **Scroll-driven animations** (GSAP ScrollTrigger, reveal-on-scroll, etc.) are captured correctly,
-  because the script sets the real scroll position each frame.
-- **Independent, time-based animations** (a looping spinner, an autoplaying hero video) are *not*
-  frame-locked to the scroll — they render at whatever their clock says when each frame is grabbed.
-  For fully deterministic time, Playwright's `page.clock` API can be added; ask if you need it.
-- **Crisp output at exactly the viewport size.** `deviceScaleFactor` is `1`, so a `1920×1080` viewport
-  yields a `1920×1080` video. For 2× (retina) capture, that's a small code change — the output would
-  then be `3840×2160`.
-- **MP4 vs WebM.** MP4/H.264 (`yuv420p`, `+faststart`) plays everywhere; WebM/VP9 is smaller and great
-  for the web. Pick via the `--out` extension.
+- **Footer getting clipped?** Heavy pages lazy-load as you scroll, so they grow taller mid-scroll.
+  The warm-up pass (on by default) scrolls through once to trigger all of it *before* measuring. If
+  a page is still growing afterwards the run says so; raise `--wait`.
+- **Capture is not real-time.** A 10s clip is 600 screenshots and takes a few minutes. That is
+  precisely why the motion is perfect, and the output is always exactly the length asked for.
+- **Element positions are measured once,** after the `before` hook and warm-up. If a mid-capture
+  action changes the layout, selector targets resolved later are stale. Put layout-changing work in
+  `before`.
+- **Don't navigate inside a per-frame action.** Each clock step registers an init script that a
+  navigation would replay into the new document.
+- **`setInterval` fires once per frame** under the frame-locked clock rather than at its nominal
+  rate. That is correct for frame stepping, but worth knowing if a page counts intervals.
+- **Output is exactly the viewport size.** `deviceScaleFactor` is `1`, so `1920x1080` in gives
+  `1920x1080` out. Retina capture is not wired up yet.
+- **MP4 vs WebM.** MP4/H.264 (`yuv420p`, `+faststart`) plays everywhere; WebM/VP9 is smaller. Pick
+  with the `--out` extension.
 
 ---
 
-## Files
+## Development
 
-- `record-scroll.js` — the script (its header comment is a quick-reference version of this README).
-- `package.json` — deps + the `npm run record` shortcut.
+```bash
+npm test        # unit tests, no browser needed
+npm run test:e2e   # records the fixture and checks the result
+npm run test:all
+```
+
+Source layout, starting at `src/cli.js`:
+
+| File | Responsibility |
+|---|---|
+| `src/options.js` | The one option-spec table. Defaults, parsing and help text are all derived from it. |
+| `src/targets.js` | Parsing scroll targets and pauses, and resolving them to pixels. Pure. |
+| `src/plan.js` | CLI flags plus a plan file, compiled into one normalised plan. Pure. |
+| `src/schedule.js` | A plan plus page geometry, turned into an explicit list of frames. Pure. |
+| `src/loader.js` | Loading a user's CJS or ESM plan/script file. |
+| `src/clock.js` | The deterministic clock, the frame stepper, and the paint barrier. |
+| `src/animations.js` | Freezing and seeking CSS animations through the Web Animations API. |
+| `src/browser.js` | Everything that touches Playwright. |
+| `src/encoder.js` | ffmpeg. |
+| `src/recorder.js` | The frame loop. |
+
+`record-scroll.js` is kept as a back-compat entry point.

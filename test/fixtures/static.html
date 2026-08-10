@@ -1,0 +1,23 @@
+<meta charset="utf-8">
+<title>srp static fixture</title>
+<style>
+  /* No animation, no transition, no timers. Every pixel is a pure function of
+     scrollY, so two recordings must be byte-identical. This is the regression
+     fixture for refactors; page.html is the one that exercises the clock. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font: 16px/1.4 monospace; }
+  section {
+    height: 500px; color: #fff; padding: 24px;
+    background-image: repeating-linear-gradient(
+      180deg, rgba(0,0,0,.18) 0 8px, rgba(0,0,0,0) 8px 17px);
+  }
+  #hero     { background-color: #e11d48; }
+  #features { background-color: #0ea5e9; }
+  #pricing  { background-color: #22c55e; }
+  #footer   { background-color: #f59e0b; }
+</style>
+
+<section id="hero">hero</section>
+<section id="features">features</section>
+<section id="pricing">pricing</section>
+<section id="footer">footer</section>
