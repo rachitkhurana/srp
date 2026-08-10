@@ -1,0 +1,9 @@
+# dependencies
+node_modules/
+
+# recorded output
+*.mp4
+*.webm
+
+# os cruft
+.DS_Store

@@ -1,0 +1,14 @@
+{
+  "name": "srp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "srp (screen record playwright) — record a perfectly smooth, dead-linear scroll of a webpage to MP4/WebM via deterministic frame-by-frame capture.",
+  "scripts": {
+    "record": "node record-scroll.js",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0",
+    "ffmpeg-static": "^5.2.0"
+  }
+}
