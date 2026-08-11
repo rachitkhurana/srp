@@ -107,3 +107,10 @@ test('DRIFT GUARD: every option carries help text and a group', () => {
   const shorts = OPTIONS.filter((o) => o.short).map((o) => o.short);
   assert.equal(new Set(shorts).size, shorts.length, 'duplicate short flag');
 });
+
+test('REGRESSION: a sub-1 fps rounds to 0 and must be rejected, not accepted as NaN', () => {
+  // Rounding used to happen AFTER the range check, so --fps 0.4 became fps 0
+  // and every frame time came out NaN.
+  assert.throws(() => parse(['--fps', '0.4']), /--fps must be a positive number/);
+  assert.equal(parse(['--fps', '0.6']).config.fps, 1, 'but 0.6 still rounds up to a usable 1');
+});

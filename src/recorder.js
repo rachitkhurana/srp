@@ -14,13 +14,12 @@ async function run(plan, io) {
   const { buildSchedule } = require('./schedule');
   const { collectSelectors } = require('./plan');
 
-  fs.mkdirSync(path.dirname(plan.out), { recursive: true });
-
   const { makeRunner } = require('./hooks');
 
   const { browser: instance, page } = await browser.launch(plan);
   let enc = null;
   let encoderStarted = false;
+  let outputExisted = false;
 
   const state = {
     maxScroll: 0,
@@ -64,6 +63,8 @@ async function run(plan, io) {
     // pass, all of which need in-page timers to keep firing.
     const clock = require('./clock');
     const animations = require('./animations');
+    const videos = require('./videos');
+    const seenFrameErrors = new Set();
     if (plan.clock.enabled) {
       state.clockBaseMs = await clock.begin(page);
       state.clockPaused = true;
@@ -75,6 +76,11 @@ async function run(plan, io) {
         await clock.stepTo(page, state.clockBaseMs, state.currentTMs + state.clockOffsetMs);
       };
     }
+
+    // After the --dry-run return, so a dry run does not create directories.
+    fs.mkdirSync(path.dirname(plan.out), { recursive: true });
+    // Only a file we create is ours to delete when a run fails.
+    outputExisted = fs.existsSync(plan.out);
 
     enc = encoder.start({ outAbs: plan.out, fps: plan.fps });
     encoderStarted = true;
@@ -105,31 +111,55 @@ async function run(plan, io) {
         await clock.stepTo(page, state.clockBaseMs, pageTMs);
       }
 
-      // 4. Freeze and seek CSS animations and transitions, which the clock
-      //    cannot reach. After the tick, so anything it just started is caught.
-      if (plan.clock.css === 'waapi') {
-        await animations.seek(page, pageTMs, {
-          shadow: plan.clock.shadow,
-          restart: plan.clock.restartAnimations,
-          firstScan: frame.i === 0,
-        });
+      // 4. Freeze and seek everything the clock cannot reach: CSS animations
+      //    and transitions on the compositor timeline, then <video> and SVG
+      //    SMIL, which run on their own pipelines. After the tick, so anything
+      //    it just started is caught.
+      //
+      //    Over every frame of the page, not just the main one: page.clock is
+      //    a context-level install and reaches iframes, so freezing only the
+      //    main frame's CSS would leave an embed with JS frozen and CSS still
+      //    running, which is worse than doing neither.
+      if (plan.clock.css === 'waapi' || plan.clock.video === 'seek') {
+        for (const target of framesOf(page)) {
+          try {
+            if (plan.clock.css === 'waapi') {
+              await animations.seek(target, pageTMs, {
+                shadow: plan.clock.shadow,
+                restart: plan.clock.restartAnimations,
+                firstScan: frame.i === 0,
+              });
+            }
+            if (plan.clock.video === 'seek') {
+              await videos.seek(target, pageTMs, {
+                shadow: plan.clock.shadow,
+                restart: plan.clock.restartAnimations,
+              });
+            }
+          } catch (err) {
+            // A frame can navigate or detach between listing and evaluating.
+            if (!seenFrameErrors.has(err.message)) {
+              seenFrameErrors.add(err.message);
+              io.warn(`could not freeze animations in a subframe: ${err.message.split('\n')[0]}`);
+            }
+          }
+        }
       }
 
       // 5. Two real vsyncs, so the new position and styles have painted. The
       //    mocked rAF would deadlock here; clock.js uses the stashed native one.
       await clock.paintBarrier(page);
 
-      const png = await page.screenshot({ type: 'png' });
-      await enc.write(png);
-
+      // Read the page state BEFORE the screenshot, so a dumped frame's
+      // metadata describes the PNG next to it. Taken afterwards it drifts by
+      // however long the capture and the pipe write took, which is exactly the
+      // situation you use --dump-frames to diagnose.
+      let probe = null;
       if (dump) {
-        const name = `frame-${String(frame.i).padStart(5, '0')}.png`;
-        fs.writeFileSync(path.join(plan.dumpFrames, name), png);
-        // Read back what the page actually thinks the time is, so a dump can
-        // be checked without OCR-ing the PNGs.
-        const probe = await page.evaluate(() => {
+        probe = await page.evaluate(() => {
           const el = document.querySelector('[data-srp-probe]');
           let animations = [];
+          let media = [];
           try {
             animations = document.getAnimations().map((a) => ({
               name: a.animationName || a.transitionProperty || 'animation',
@@ -138,11 +168,28 @@ async function run(plan, io) {
               state: a.playState,
             }));
           } catch {}
-          return { text: el ? el.textContent : null, animations };
+          try {
+            media = [...document.querySelectorAll('video, audio')].map((v) => ({
+              tag: v.tagName.toLowerCase(),
+              t: +v.currentTime.toFixed(3),
+              paused: v.paused,
+              loop: v.loop,
+              managed: !!(window.__srpMediaManaged && window.__srpMediaManaged.has(v)),
+            }));
+          } catch {}
+          return { text: el ? el.textContent : null, animations, media };
         });
+      }
+
+      const png = await page.screenshot({ type: 'png' });
+      await enc.write(png);
+
+      if (dump) {
+        const name = `frame-${String(frame.i).padStart(5, '0')}.png`;
+        fs.writeFileSync(path.join(plan.dumpFrames, name), png);
         dump.push({
           i: frame.i, file: name, tMs: frame.tMs, y: frame.y, segment: frame.segment,
-          probe: probe.text, animations: probe.animations,
+          probe: probe.text, animations: probe.animations, media: probe.media,
         });
       }
 
@@ -160,9 +207,14 @@ async function run(plan, io) {
       io.log(`  dumped ${dump.length} frames to ${plan.dumpFrames}`);
     }
 
+    // Checked before the `after` hook, which is free to scroll or navigate and
+    // would invalidate the answer.
+    const shortOfBottom =
+      measured.maxScroll > 0 && !endsShortOfBottom(schedule) && !(await browser.reachedBottom(page));
+
     if (plan.after) await runHook(plan.after, { label: 'after', phase: 'after' });
 
-    if (!(await browser.reachedBottom(page)) && measured.maxScroll > 0 && !hasHoldAtEnd(schedule)) {
+    if (shortOfBottom) {
       io.warn('final frame did not reach the bottom; the page is still growing, so try a longer --wait.');
     }
 
@@ -170,8 +222,9 @@ async function run(plan, io) {
     return { schedule, outAbs: plan.out, warnings: state.warnings };
   } catch (err) {
     if (enc) enc.kill();
-    // Don't leave a truncated video behind, but only remove a file we made.
-    if (encoderStarted) {
+    // Don't leave a truncated video behind, but never delete a file that was
+    // already sitting there before this run started.
+    if (encoderStarted && !outputExisted) {
       try {
         fs.unlinkSync(plan.out);
       } catch {}
@@ -184,8 +237,14 @@ async function run(plan, io) {
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
-/** A plan may deliberately finish somewhere other than the bottom. */
-function hasHoldAtEnd(schedule) {
+/** The main frame plus any iframes. Avoids the array churn on the common case. */
+function framesOf(page) {
+  const all = page.frames();
+  return all.length > 1 ? all : [page];
+}
+
+/** True when the plan deliberately stops short of the bottom. */
+function endsShortOfBottom(schedule) {
   const last = schedule.segments[schedule.segments.length - 1];
   return !last || last.y1 < schedule.maxScroll;
 }

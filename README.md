@@ -1,36 +1,42 @@
 # srp
 
-*screen record playwright*: record a **perfectly smooth, dead-linear scroll** of any webpage to an
-MP4 or WebM video, pausing wherever you like and running your own Playwright code mid-capture.
+**Record a perfectly smooth, dead-linear scroll of any webpage to video.**
 
-Built for capturing marketing pages, portfolios and scroll-driven animations cleanly. No jitter, no
-dropped frames, exact duration every time, and animation that plays at the same speed on every run
-regardless of how fast the machine is.
+*screen record playwright*
 
 ---
 
-## Why it's smooth
+![srp recording apple.com/ae/airpods-pro](docs/airpods-pro.gif)
 
-It does **not** screen-record in real time (which drops or duplicates frames whenever the page
-hitches). Instead it captures **deterministically**:
+**apple.com/ae/airpods-pro** · Six seconds held on the hero while its video plays at its own speed,
+then the highlights carousel advanced one card mid-capture, then 27000px of scroll.
+[The plan that made it](examples/airpods-pro.plan.cjs) · [full 51s recording](docs/airpods-pro.mp4)
 
-1. It computes the exact scroll position for every output frame (`600 frames = 10s at 60fps`).
-2. It sets that position, advances page time by exactly one frame, waits for the browser to paint,
-   and screenshots.
-3. It pipes the frames straight into **ffmpeg** at a hard-locked frame rate.
+![srp recording ultrahuman.com/ring](docs/uh-ring.gif)
 
-Because the scroll offset is a pure function of the frame index, the motion has **zero jitter by
-construction**. And because page time is driven one frame at a time rather than read off the wall
-clock, animations play at their real speed no matter how slow the machine is.
+**ultrahuman.com/ring** · A replay button clicked on frame 0, six seconds held while the hero video
+plays through once, then 22000px of scroll.
+[The plan that made it](examples/uh-ring.plan.cjs) · [full 36s recording](docs/uh-ring.mp4)
 
 ---
 
-## Requirements
+srp is not a screen recorder. It computes the exact scroll position for every output frame, advances
+page time by exactly one frame, screenshots, and pipes the PNGs into a bundled ffmpeg at a locked
+frame rate.
 
-- **Node 20+**
-- That's it. **ffmpeg ships bundled** via `ffmpeg-static`, so no system install is needed.
+That buys three things a real-time recorder cannot give you:
+
+|  |  |
+|---|---|
+| **No jitter, ever** | Scroll offset is a pure function of frame index, so the motion has no easing and no dropped frames by construction. |
+| **Exact length** | A 20 second scroll is 20.000 seconds of video. A slow machine takes longer to render; it does not produce a worse file. |
+| **Animation at true speed** | Page time is stepped one frame at a time, so a 7.5s video loop takes 7.5s of finished video no matter how long each frame took to capture. |
+
+---
 
 ## Install
+
+Needs **Node 20+**. ffmpeg ships bundled via `ffmpeg-static`, so there is nothing else to install.
 
 ```bash
 cd srp
@@ -38,54 +44,33 @@ npm install          # playwright + ffmpeg-static, and downloads Chromium
 npm link             # optional: puts `srp` on your PATH
 ```
 
-`npm install` runs `playwright install chromium` for you. If it ever goes missing, run
+`npm install` runs `playwright install chromium` for you. If it goes missing, run
 `npx playwright install chromium`.
 
----
-
-## Usage
+## Quick start
 
 ```bash
-srp [url] [duration] [options]
-srp --url <url> --duration <seconds> [options]
+# a plain top-to-bottom scroll
+srp https://site.com 20 --out demo.mp4
 
-# without npm link:
-node bin/srp.js [url] [duration] [options]
+# hold 2s at 40%, and 1.5s on the pricing section
+srp https://site.com 20 --pause 40%:2 --pause '#pricing:1.5'
+
+# see the frame schedule without spending a render
+srp https://site.com 20 --pause 40%:2 --dry-run
+
+# no npm link? use the entry point directly
+node bin/srp.js https://site.com 20
 ```
 
-The video is written relative to your current working directory.
-
-```bash
-# Local dev server, 15-second scroll
-srp http://localhost:3000 15
-
-# A live site to WebM
-srp --url https://rachitkay.com --duration 8 --out hero.webm
-
-# A local file, watched live in a real browser window
-srp ./index.html 6 --headed
-```
+The video is written relative to your current directory. `--out clip.webm` switches to VP9.
 
 ---
 
 ## Pausing
 
-Hold the scroll at a point so an animation can play out. Targets can be a percentage, a pixel
-offset, a CSS selector, or `top` / `bottom`:
-
-```bash
-srp https://site.com 10 --pause 40%:2 --pause '#pricing:1.5' --pause bottom:1
-```
-
-By default **pauses extend the video**: `--duration` is the scroll-motion time, so the example above
-is `10 + 2 + 1.5 + 1 = 14.5s`. Pass `--fixed-duration` to make `--duration` a hard total instead,
-compressing the scroll to make room for the holds.
-
-Scroll time is shared between the legs in proportion to distance travelled, so a pause at 90% gets a
-long first leg and a short last one, not two equal halves.
-
-Selector targets take modifiers behind an `@`, so a selector that happens to end in a number is
-never misread:
+Hold the scroll so an animation can play out. Targets are a percentage, a pixel offset, a CSS
+selector, or `top` / `bottom`:
 
 | Target | Means |
 |---|---|
@@ -97,22 +82,30 @@ never misread:
 | `#hero@+120` | 120px further down |
 | `#hero@center-40` | both |
 
-Check what you are going to get without recording anything:
+Modifiers live behind an `@`, so a selector that happens to end in a number is never misread:
+`#hero-40` is the element, not `#hero` offset by 40.
 
-```bash
+**Pauses extend the video.** `srp site.com 10 --pause 40%:2 --pause bottom:1` is a 13 second clip:
+`--duration` is the scroll-motion time and holds add on top. Pass `--fixed-duration` to make it a
+hard 10 instead, compressing the scroll to make room.
+
+Scroll time is shared between the legs in proportion to distance, so a pause at 90% correctly gets a
+long first leg and a short last one rather than two equal halves:
+
+```
 $ srp https://site.com 10 --pause 50%:2 --dry-run
   extent 1760px · 12s total (10s scroll + 2s held) · 60fps · 720 frames
-   0  scroll  0 -> 880px       5s      frames 0..299 (300)
-   1  hold    hold @ 880px     2s      frames 300..419 (120)
-   2  scroll  880 -> 1760px    5s      frames 420..719 (300)
+   0  scroll  0 -> 880px       5s      frames 0..299    (300)
+   1  hold    hold @ 880px     2s      frames 300..419  (120)
+   2  scroll  880 -> 1760px    5s      frames 420..719  (300)
 ```
 
 ---
 
 ## Running your own code
 
-`--script` takes a file exporting `before` and `after` hooks. They get Playwright's `page`, so they
-can do anything Playwright can:
+`--script` takes a file exporting `before` and `after`. They get Playwright's `page`, so they can do
+anything Playwright can:
 
 ```js
 // hooks.js
@@ -129,8 +122,8 @@ srp https://site.com 10 --script ./hooks.js --pause 40%:2
 `before` runs after load but **before** the settle wait, the warm-up pass and measurement, so
 dismissing a modal or expanding an accordion reflows the page before any geometry is read.
 
-For full control, `--plan` takes a file that describes the whole timeline. Steps run in order, and
-any step can carry an `action` that fires on its first frame (or its last, with `actionAt: 'end'`):
+For full control, `--plan` describes the whole timeline. Steps run in order, and any step can carry
+an `action` that fires on one of its frames:
 
 ```js
 // plan.js
@@ -141,11 +134,11 @@ module.exports = {
   before: async (page) => page.click('#accept-cookies'),
 
   timeline: [
-    { scrollTo: '#hero',     duration: 2 },
+    { scrollTo: '#hero',    duration: 2 },
     { hold: 1.5, action: async (page) => page.click('.tab-2') },
-    { scrollTo: '#pricing',  duration: 3 },
+    { scrollTo: '#pricing', duration: 3 },
     { hold: 1 },
-    { scrollTo: '100%',      duration: 4 },
+    { scrollTo: '100%',     duration: 4 },
   ],
 
   after: async (page) => page.screenshot({ path: 'last.png' }),
@@ -156,9 +149,9 @@ module.exports = {
 srp --plan ./plan.js
 ```
 
-Both `.cjs`/CommonJS and `.mjs`/ESM files work, with a default export or named exports. A plan file
-can set any option (in kebab or camel case) except `help`, `version`, `plan` and `script`; a flag you
-actually type on the command line still wins.
+Both CommonJS and ESM load, with a default export or named exports. A plan file can set any option
+(kebab or camel case) except `help`, `version`, `plan` and `script`; a flag you actually type still
+wins.
 
 ### Timeline steps
 
@@ -166,10 +159,10 @@ A step is either a scroll or a hold, never both. These are all the keys it takes
 
 | Key | On | Meaning |
 |---|---|---|
-| `scrollTo` | scroll | Where to scroll to. Required. Takes any target (`40%`, `#pricing`, `bottom`) |
+| `scrollTo` | scroll | Where to scroll to. Required. Takes any target |
 | `hold` | hold | How long to hold, in seconds. This *is* the length, so do not also pass `duration` |
 | `at` | hold | Where to hold. Omit it to hold wherever the previous step ended, which is usual |
-| `duration` | scroll | Seconds. Omit it to share the top-level `duration` budget with the other open-ended steps, split in proportion to distance travelled |
+| `duration` | scroll | Seconds. Omit it to share the top-level budget with the other open-ended steps |
 | `action` | either | `async (page, ctx) => {}`, fired on one frame of this step |
 | `actionAt` | either | `'start'` (default) or `'end'`: the step's first or last frame |
 | `label` | either | Shown in `--dry-run` and in log lines |
@@ -189,19 +182,20 @@ Hooks are called `fn(page, ctx)`. `page` is a real Playwright `Page`. `ctx` carr
 | `ctx.sleep(ms)` | Advance page time. See below |
 | `ctx.log(msg)` | Print a line under the current step's label |
 
-**Inside a hook, use `ctx.sleep(ms)`, not `page.waitForTimeout(ms)`.** During capture the page clock
-is frozen, so `waitForTimeout` burns real seconds while the page sits still, and an in-page
-`setTimeout` never fires at all. `ctx.sleep` advances page time instead, without spending video
-frames on it: if you want to *watch* something play, give the step a longer `hold`.
+> **Inside a hook, use `ctx.sleep(ms)`, not `page.waitForTimeout(ms)`.** During capture the page
+> clock is frozen, so `waitForTimeout` burns real seconds while the page sits still, and an in-page
+> `setTimeout` never fires at all. `ctx.sleep` advances page time instead, without spending video
+> frames on it: to *watch* something play, give the step a longer `hold`.
 
 A failing per-frame action warns and carries on, because losing a whole render to a decorative click
-is worse than the click. `--strict-hooks` makes it abort instead. A failing `before`/`after` always
-aborts, and the partial video is removed.
+is worse than losing the click. `--strict-hooks` makes it abort instead. A failing `before`/`after`
+always aborts, and the partial video is removed.
 
 ### Worked examples
 
 Every file in [`examples/`](examples/) is loaded and validated by the test suite, so none of them can
-drift out of sync with the validator. Copy one and cut it down.
+drift out of sync with the validator. Copy one and cut it down. Your own files go in
+[`hooks/`](hooks/), which is git-ignored so scratch work never shows up in `git status`.
 
 | File | What it shows |
 |---|---|
@@ -210,40 +204,70 @@ drift out of sync with the validator. Copy one and cut it down.
 | [`basic.plan.cjs`](examples/basic.plan.cjs) | The smallest `--plan` file |
 | [`reference.plan.cjs`](examples/reference.plan.cjs) | Every supported key, annotated |
 | [`recipes.plan.cjs`](examples/recipes.plan.cjs) | The patterns worth copying, each with its reasoning |
-| [`uh-ring.plan.cjs`](examples/uh-ring.plan.cjs) | A real one: replay a hero animation, hold, then scroll a 22000px page |
-
-Your own files go in [`hooks/`](hooks/), which is git-ignored so scratch work never shows up in
-`git status`.
+| [`airpods-pro.plan.cjs`](examples/airpods-pro.plan.cjs) | The recording at the top of this page: hold on the hero, advance a carousel mid-capture, scroll 27000px |
+| [`uh-ring.plan.cjs`](examples/uh-ring.plan.cjs) | Click a replay button on frame 0, hold 6s while the hero video plays at true speed, scroll 22000px |
 
 ---
 
 ## Deterministic time
 
-Frame-by-frame capture takes roughly 30ms of real time per frame but each frame represents 1/fps of
-video, so anything the page animates on its own runs at the wrong speed. A hold is the worst case:
-the scroll stops, but the animation keeps crawling at whatever rate the machine happens to
-screenshot. srp fixes this in two places, both on by default:
+Producing one frame costs far more real time than the `1/fps` it represents, so anything the page
+animates by itself would run at the wrong speed. Three mechanisms stop that, all on by default:
 
-- **`page.clock`** drives everything JavaScript-timed: `requestAnimationFrame`, `setTimeout`,
-  `setInterval`, `Date.now`, `performance.now`. GSAP and friends land here.
-- **The Web Animations API** drives CSS keyframe animations and transitions, which live on the
-  compositor's own timeline and are completely untouched by `page.clock`.
+| Mechanism | Covers |
+|---|---|
+| `page.clock` | Everything JavaScript-timed: `requestAnimationFrame`, `setTimeout`, `setInterval`, `Date.now`, `performance.now`. GSAP and friends land here |
+| Web Animations API | CSS keyframe animations and transitions, which live on the compositor's own timeline and are untouched by the clock |
+| Pause and seek | `<video>` and SVG SMIL, which run on the media pipeline and Blink's SMIL timer and are untouched by both of the above |
 
-Scroll-driven CSS (`animation-timeline: scroll()`) is deliberately left alone, since it is already
-frame-locked by the scroll position and freezing it would kill the exact effect you are recording.
+Two things are deliberately left alone. Scroll-driven CSS (`animation-timeline: scroll()`) is already
+frame-locked by scroll position, and freezing it would kill the exact effect you are recording. A
+video that is already **paused** when srp first sees it is either deliberately stopped or scrubbed by
+scroll, which is how Apple's product pages drive their hero videos; only a video seen *playing* is
+taken over.
 
-By default an animation already running when capture starts keeps its phase. `--restart-animations`
-starts everything from zero on frame 0, so two runs put every animation at exactly the same point on
-every frame.
+Without the third mechanism a video plays at `(real ms per frame) / (1000/fps)` times speed. On the
+recording above that was about 6x: a 7.5 second loop finished six times inside a six second hold.
 
-How exact is "the same"? Frame timing is exact: on any run, frame `i` is rendered at page time
-`i * 1000/fps`, to the millisecond. Pixels are byte-identical for content that is a pure function of
-scroll position. They are not *quite* byte-identical for an element Chromium has promoted to its own
-compositor layer: whether it is still on that layer at screenshot time is settled at page load, and
-the two paths rasterise edge antialiasing a shade differently. That shows up as a thin halo worth a
-hundred-odd pixels, never as a difference in animation phase.
+By default anything already running when capture starts keeps its phase. `--restart-animations`
+starts everything from zero on frame 0, so two runs put every animation at the same point on every
+frame.
 
-If a page misbehaves with faked timers (a consent SDK that polls, a video player that uses
+<details>
+<summary><b>How reproducible is it, exactly?</b></summary>
+
+<br>
+
+Frame timing is exact: on any run, frame `i` is rendered at page time `i * 1000/fps`, to the
+millisecond.
+
+Pixels are byte-identical for content that is a pure function of scroll position. They are not
+*quite* byte-identical for an element Chromium has promoted to its own compositor layer: whether it
+is still on that layer at screenshot time is settled at page load, and the two paths rasterise edge
+antialiasing a shade differently. That shows up as a thin halo worth a hundred-odd pixels, never as
+a difference in animation phase.
+
+</details>
+
+<details>
+<summary><b>What is still not frame-locked</b></summary>
+
+<br>
+
+- **`setInterval` with a period shorter than one frame.** The clock advances one frame at a time and
+  fires each due timer once, so `setInterval(fn, 10)` at 60fps fires 60 times per second of page
+  time rather than 100, about 0.6x speed. Periods at or above the frame step are exact, and
+  `requestAnimationFrame` is unaffected.
+- **Animated GIF, APNG and animated WebP**, advanced by Blink's image pipeline with no JavaScript
+  hook to seek them.
+- **`<marquee>`**, which has its own internal timer.
+- A WAAPI animation paused past its end reports `playState: 'paused'`, so its `finished` promise
+  never resolves. Pages that sequence with `el.animate(...).finished.then(next)` stall after the
+  first step. rAF-driven libraries are unaffected.
+
+</details>
+
+If a page misbehaves with faked timers (a consent SDK that polls, a player that uses
 `performance.now` for buffering), fall back with `--no-clock`. Everything else still works.
 
 ---
@@ -269,7 +293,8 @@ If a page misbehaves with faked timers (a consent SDK that polls, a video player
 | `--headed` | *(off)* | Show the browser window instead of running headless. |
 | `--no-clock` | *(off)* | Record at wall-clock time instead of frame-locking page time. |
 | `--css <waapi\|off>` | `waapi` | Frame-lock CSS keyframes and transitions too. |
-| `--restart-animations` | *(off)* | Start every CSS animation from 0 on frame 0. |
+| `--video <seek\|off>` | `seek` | Frame-lock `<video>` and SVG SMIL, which run on wall-clock otherwise. |
+| `--restart-animations` | *(off)* | Start every animation, video and SMIL clip from 0 on frame 0. |
 | `--shadow-animations` | *(off)* | Also freeze animations inside shadow roots (walks the DOM every frame). |
 | `--dry-run` | *(off)* | Measure the page and print the frame schedule without recording. |
 | `--dump-frames <dir>` | | Also write every frame as a PNG plus a `frames.json`, for debugging. |
@@ -292,58 +317,54 @@ If a page misbehaves with faked timers (a consent SDK that polls, a video player
 ✔ Saved /path/to/scroll.mp4
 ```
 
-Load, `before` hook, settle (`--wait`), warm-up scroll, measure the stable height, resolve every
-selector, build the frame schedule, freeze the clock, capture, `after` hook, encode.
+Load, `before` hook, settle, warm-up scroll, measure the stable height, resolve every selector, build
+the frame schedule, freeze the clock, capture, `after` hook, encode.
 
----
+**Capture is not real time.** A 51 second clip at 60fps is 3060 screenshots and takes minutes. That
+is precisely why the motion is perfect, and why the output is always exactly the length you asked
+for. Use `--dry-run` to check the plan before committing to a render.
 
 ## Notes and troubleshooting
 
 - **Footer getting clipped?** Heavy pages lazy-load as you scroll, so they grow taller mid-scroll.
-  The warm-up pass (on by default) scrolls through once to trigger all of it *before* measuring. If
-  a page is still growing afterwards the run says so; raise `--wait`.
-- **Capture is not real-time.** A 10s clip is 600 screenshots and takes a few minutes. That is
-  precisely why the motion is perfect, and the output is always exactly the length asked for.
+  The warm-up pass (on by default) scrolls through once to trigger it all *before* measuring. If a
+  page is still growing afterwards the run says so; raise `--wait`.
 - **Element positions are measured once,** after the `before` hook and warm-up. If a mid-capture
   action changes the layout, selector targets resolved later are stale. Put layout-changing work in
   `before`.
 - **Don't navigate inside a per-frame action.** Each clock step registers an init script that a
   navigation would replay into the new document.
-- **`setInterval` fires once per frame** under the frame-locked clock rather than at its nominal
-  rate. That is correct for frame stepping, but worth knowing if a page counts intervals.
 - **Output is exactly the viewport size.** `deviceScaleFactor` is `1`, so `1920x1080` in gives
   `1920x1080` out. Retina capture is not wired up yet.
-- **Two runs can differ by a thin halo.** An element Chromium has promoted to its own compositor
-  layer rasterises edge antialiasing slightly differently depending on whether it is still on that
-  layer at screenshot time, which is settled at page load. It is worth about a hundred pixels and it
-  is never a difference in animation phase, which stays exact to the millisecond.
 - **MP4 vs WebM.** MP4/H.264 (`yuv420p`, `+faststart`) plays everywhere; WebM/VP9 is smaller. Pick
   with the `--out` extension.
-
----
 
 ## Development
 
 ```bash
-npm test        # unit tests, no browser needed
-npm run test:e2e   # records the fixture and checks the result
+npm test           # unit tests, no browser needed
+npm run test:e2e   # records fixtures and checks the result
 npm run test:all
 ```
 
-Source layout, starting at `src/cli.js`:
+Source layout, starting at `src/cli.js`. Flags and an optional plan file compile to one normalised
+plan; the plan plus measured page geometry compile to an explicit list of frames; the recorder walks
+that list.
 
 | File | Responsibility |
 |---|---|
-| `src/options.js` | The one option-spec table. Defaults, parsing and help text are all derived from it. |
-| `src/targets.js` | Parsing scroll targets and pauses, and resolving them to pixels. Pure. |
-| `src/plan.js` | CLI flags plus a plan file, compiled into one normalised plan. Pure. |
-| `src/schedule.js` | A plan plus page geometry, turned into an explicit list of frames. Pure. |
-| `src/loader.js` | Loading a user's CJS or ESM plan/script file. |
-| `src/clock.js` | The deterministic clock, the frame stepper, and the paint barrier. |
-| `src/animations.js` | Freezing and seeking CSS animations through the Web Animations API. |
-| `src/browser.js` | Everything that touches Playwright. |
-| `src/encoder.js` | ffmpeg. |
-| `src/recorder.js` | The frame loop. |
+| `src/options.js` | The one option-spec table. Defaults, parsing and help text are all derived from it |
+| `src/targets.js` | Parsing scroll targets and pauses, and resolving them to pixels. Pure |
+| `src/plan.js` | CLI flags plus a plan file, compiled into one normalised plan. Pure |
+| `src/schedule.js` | A plan plus page geometry, turned into an explicit list of frames. Pure |
+| `src/loader.js` | Loading a user's CJS or ESM plan/script file |
+| `src/clock.js` | The deterministic clock, the frame stepper, and the paint barrier |
+| `src/animations.js` | Freezing and seeking CSS animations through the Web Animations API |
+| `src/videos.js` | Freezing and seeking `<video>` and SVG SMIL |
+| `src/hooks.js` | Running user code safely: the ctx object, timeouts, error policy |
+| `src/browser.js` | Everything that touches Playwright |
+| `src/encoder.js` | ffmpeg |
+| `src/recorder.js` | The frame loop |
 
 `record-scroll.js` is kept as a back-compat entry point.
 

@@ -115,6 +115,14 @@ function buildSchedule(plan, ctx) {
     auto.forEach((i, k) => {
       dur[i] = spanTotal > 0 ? (plan.scrollDurationS * spans[k]) / spanTotal : plan.scrollDurationS / auto.length;
     });
+  } else if (plan.durationWasSet && !plan.fixedDuration) {
+    // Every scroll step named its own duration, so the budget is never read.
+    // Silently ignoring a flag the user typed is how you get a 4s video after
+    // asking for 30.
+    warnings.push(
+      `--duration ${round2(plan.scrollDurationS)}s was ignored: every step in the timeline sets its own ` +
+        `duration. Remove those, or use --fixed-duration to scale them to fit.`
+    );
   }
 
   const holdS = segs.reduce((a, s, i) => a + (s.kind === 'hold' ? dur[i] : 0), 0);
@@ -129,8 +137,17 @@ function buildSchedule(plan, ctx) {
           `raise --duration or shorten a pause`
       );
     }
-    const k = motionS > 0 ? (totalS - holdS) / motionS : 0;
-    if (motionS > 0 && k < 0.05) {
+    if (motionS === 0) {
+      // Nothing to compress. Padding the timeline out to --duration would land
+      // entirely on the last segment, so a declared 3s hold would silently run
+      // for 8s while --dry-run still printed "3s".
+      throw new UsageError(
+        `--fixed-duration needs something to compress, but this timeline is ${round2(holdS)}s of holds ` +
+          `and no scrolling. Drop --fixed-duration, or give a step a scrollTo.`
+      );
+    }
+    const k = (totalS - holdS) / motionS;
+    if (k < 0.05) {
       warnings.push(`--fixed-duration compresses the scroll to ${(k * 100).toFixed(1)}% of its natural speed`);
     }
     for (let i = 0; i < dur.length; i++) if (segs[i].kind === 'scroll') dur[i] *= k;
@@ -154,8 +171,14 @@ function buildSchedule(plan, ctx) {
     T.push(t0);
     f += counts[k];
     t0 += dur[k];
-    if (counts[k] === 0 && segs[k].kind === 'hold') {
-      warnings.push(`the ${round2(dur[k])}s hold at ${Math.round(segs[k].y0)}px is shorter than one frame at ${plan.fps}fps and was dropped`);
+    if (counts[k] === 0) {
+      // A zero-frame segment emits nothing at all, which quietly takes its
+      // action with it: the click you attached simply never fires.
+      const what = segs[k].kind === 'hold' ? `the ${round2(dur[k])}s hold at ${Math.round(segs[k].y0)}px` : `"${segs[k].label}"`;
+      warnings.push(
+        `${what} is shorter than one frame at ${plan.fps}fps and was dropped` +
+          (segs[k].action ? ', along with its action, which will never fire' : '')
+      );
     }
   }
 

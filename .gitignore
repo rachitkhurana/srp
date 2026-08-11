@@ -7,6 +7,10 @@ output/*
 *.webm
 *.png
 
+# ... except the demos that ship with the README
+!docs/airpods-pro.mp4
+!docs/uh-ring.mp4
+
 # your own hook and plan files; the shipped examples live in examples/
 hooks/*
 !hooks/README.md

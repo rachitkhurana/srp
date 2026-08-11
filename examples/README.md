@@ -38,7 +38,13 @@ srp --plan examples/basic.plan.cjs --url https://my-site.com
 | `basic.plan.cjs` | The smallest `--plan` file: three steps and one hold |
 | `reference.plan.cjs` | Every supported key, annotated with the rules the validator actually enforces |
 | `recipes.plan.cjs` | The patterns worth copying, each with its reasoning |
-| `uh-ring.plan.cjs` | A real one: warm up, replay a hero animation, hold, then scroll a 22000px page |
+| `airpods-pro.plan.cjs` | The recording in [`../docs/demo.gif`](../docs/demo.gif): hold on the hero, advance a carousel mid-capture, then scroll 27000px |
+| `uh-ring.plan.cjs` | Click a replay button on frame 0, hold 6s while the hero video plays at true speed, then scroll 22000px |
+
+Both of the real-page examples are worth reading for the same two reasons: the click has to be a
+timeline **action** rather than a `before` hook (the warm-up scroll would undo it), and it has to be
+a DOM `el.click()` rather than `page.click()` (which scrolls the element into view and would knock
+frame 0 off the top of the page).
 
 ## Two things that catch people out
 
@@ -52,4 +58,5 @@ During capture page time is frozen and stepped one frame at a time.
 `waitForTimeout` is a Node-side timer, so it burns real seconds while the page
 sits still. An in-page `setTimeout` never fires at all.
 
-Both are explained at the point of use in `recipes.plan.cjs`.
+Both are explained at the point of use in `recipes.plan.cjs`, and `airpods-pro.plan.cjs` is a real
+page where both mattered.

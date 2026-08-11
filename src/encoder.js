@@ -48,19 +48,36 @@ function start({ outAbs, fps }) {
   proc.stdin.on('error', () => {});
 
   const done = new Promise((resolve, reject) => {
-    proc.on('close', (code) => {
-      exitCode = code;
+    proc.on('close', (code, signal) => {
+      // A signal kill reports code === null, so normalise to a non-null
+      // sentinel: exitCode doubles as the "is it dead" flag.
+      exitCode = code === null ? -1 : code;
       if (code === 0) resolve();
-      else reject(new RecordError(`ffmpeg exited ${code}\n${log.slice(-1200)}`));
+      else reject(new RecordError(`ffmpeg ${signal ? `was killed by ${signal}` : `exited ${code}`}\n${log.slice(-1200)}`));
     });
     proc.on('error', (e) => reject(new RecordError(`could not run ffmpeg: ${e.message}`)));
   });
   done.catch(() => {}); // keep an early rejection from going unhandled before finish()
 
+  // If ffmpeg is gone, surface WHY. `done` rejects with the real
+  // "ffmpeg exited N" plus its stderr; a clean exit mid-stream is its own bug,
+  // because frames we still have to write would be silently dropped.
+  const ensureAlive = async () => {
+    if (exitCode === null) return;
+    await done;
+    throw new RecordError('ffmpeg exited before every frame had been written');
+  };
+
   return {
     async write(png) {
-      if (exitCode !== null) await done; // surfaces the real ffmpeg error, not EPIPE
-      if (!proc.stdin.write(png)) await new Promise((r) => proc.stdin.once('drain', r));
+      await ensureAlive();
+      if (proc.stdin.write(png)) return;
+      // A destroyed pipe never emits 'drain', so waiting on it alone hangs the
+      // whole recorder. ffmpeg dying mid-stream (disk full, OOM, killed) used
+      // to wedge the run forever, browser open, nothing printed. Racing `done`
+      // turns that into the real error.
+      await Promise.race([new Promise((r) => proc.stdin.once('drain', r)), done]);
+      await ensureAlive();
     },
     async finish() {
       proc.stdin.end();

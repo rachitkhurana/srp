@@ -59,7 +59,8 @@ node bin/srp.js [url] [duration] […]    # without it
 
   --no-clock             record at wall-clock time (escape hatch)
   --css <waapi|off>      CSS animation freezing, default waapi
-  --restart-animations   every CSS animation starts at 0 on frame 0
+  --video <seek|off>     <video> and SVG SMIL freezing, default seek
+  --restart-animations   every animation, video and SMIL clip starts at 0
   --shadow-animations    also walk shadow roots, every frame
 
   --dry-run              measure and print the schedule, record nothing
@@ -125,8 +126,14 @@ Copy `examples/recipes.plan.cjs`; every pattern in it is annotated with why.
 4. Symptoms worth knowing:
    - **Footer clipped**: the page grew during capture. Raise `--wait`, or keep the warm-up on.
    - **Images popping in**: you passed `--no-warmup` on a lazy-loading page.
-   - **An animation plays at the wrong speed**: something is driving it that neither the clock nor
-     the WAAPI pass reaches. Check `frames.json` for its timeline type.
+   - **An animation plays at the wrong speed**: something is driving it that none of the three
+     mechanisms reaches. Check `frames.json` for its timeline type, and the `media` array for
+     whether a video was adopted (`managed: true`) or left alone.
+   - **A video plays at the wrong speed**: if `managed` is false it was already paused when srp
+     first saw it, so srp assumed it was scroll-scrubbed. Note the error is not always *fast*: it
+     is wall-clock instead of frame-clock, so a light page at a low fps runs it slow instead.
+   - **Something animates that nothing reports**: probably an animated GIF, `<marquee>`, or a
+     sub-frame `setInterval`. See the limitations in the README; these are not fixable here.
    - **A hold looks frozen solid**: expected if the page has nothing time-driven at that point.
 
 ## Workflow 5: a page that breaks under the faked clock
@@ -188,6 +195,19 @@ by measurement against the installed Playwright, not from documentation.
   (a scroll-driven animation reports a `ScrollTimeline`, and freezing it kills the exact effect
   being recorded) and anything whose `currentTime` is not a number (it reports a `CSSUnitValue`, and
   assigning to it throws).
+- **`videos.js` must only adopt media it has seen PLAYING.** A video that is already `paused` the
+  first time we look is either deliberately stopped or scroll-scrubbed, and scroll-scrubbed is
+  common: Apple's product pages pause their hero videos and drive `currentTime` from scroll.
+  Membership lives in a `WeakSet` populated on seeing a video play. Never infer it from the current
+  `paused` state, which adopts the scrubbed ones too and destroys the effect. Measured on
+  apple.com/ae/airpods-pro: 7 videos correctly left alone, 2 adopted.
+- **Waiting for a seek must use the native rAF and must be bounded.** With the clock frozen an
+  in-page `setTimeout` never fires, and `page.evaluate` has no timeout, so an unbounded wait on a
+  video seeking outside its buffered range hangs the process.
+- **Three mechanisms, not two.** `page.clock` for JS time, WAAPI for CSS, pause-and-seek for
+  `<video>` and SVG SMIL. SMIL is the sneaky one: Blink runs it off its own time container and
+  `document.getAnimations()` does not report it, so it slips past both WAAPI guards by never being
+  seen at all.
 - **`schedule.js` and `targets.js` are pure and must stay pure.** They are the highest-value test
   surface: all the timing arithmetic is checkable without a browser, and `--dry-run` is just these
   two plus a printer.

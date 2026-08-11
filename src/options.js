@@ -112,8 +112,13 @@ const OPTIONS = [
     help: 'frame-lock CSS keyframes and transitions too (page.clock cannot reach them)',
   },
   {
+    name: 'video', group: 'Determinism', type: 'string', default: 'seek', meta: '<seek|off>',
+    choices: ['seek', 'off'],
+    help: 'frame-lock <video> and SVG SMIL, which run on wall-clock time otherwise',
+  },
+  {
     name: 'restart-animations', group: 'Determinism', type: 'bool', default: false,
-    help: 'start every CSS animation from 0 on the first frame instead of keeping its phase',
+    help: 'start every animation, video and SMIL clip from 0 on the first frame, not from its phase',
   },
   {
     name: 'shadow-animations', group: 'Determinism', type: 'bool', default: false,
@@ -191,7 +196,10 @@ Examples:
 }
 
 function coerceNumber(raw, o) {
-  const n = Number(raw);
+  // Round BEFORE range-checking. The other way round, --fps 0.4 passes the
+  // "> 0" test and then rounds to 0, which makes every frame time NaN.
+  const raw_n = Number(raw);
+  const n = o.type === 'int' && Number.isFinite(raw_n) ? Math.round(raw_n) : raw_n;
   const bad = !Number.isFinite(n) || (o.allowZero ? n < 0 : n <= 0);
   if (bad) {
     throw new UsageError(
@@ -200,7 +208,7 @@ function coerceNumber(raw, o) {
         : `--${o.name} must be a positive number (got "${raw}")`
     );
   }
-  return o.type === 'int' ? Math.round(n) : n;
+  return n;
 }
 
 /**

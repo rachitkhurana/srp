@@ -38,7 +38,10 @@ function makeRunner(plan, page, io, state) {
         : undefined,
       clock: {
         paused: () => state.clockPaused,
-        nowMs: () => (state.clockPaused ? state.clockBaseMs + (frame ? frame.tMs : 0) : null),
+        // Must include the offset ctx.sleep accumulates, or this reads behind
+        // the page's real time by however much has been slept.
+        nowMs: () =>
+          state.clockPaused ? state.clockBaseMs + (frame ? frame.tMs : 0) + state.clockOffsetMs : null,
       },
       // Advance the RECORDING clock rather than real time. state.sleep is
       // swapped for the clock-advancing version once the clock is installed.

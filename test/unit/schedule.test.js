@@ -155,3 +155,41 @@ test('every frame index is contiguous from 0', () => {
   assert.equal(s.frames.length, s.totalFrames);
   s.frames.forEach((f, i) => assert.equal(f.i, i));
 });
+
+test('WARNS when --duration is set but every step names its own', () => {
+  // Silently ignoring a typed flag is how you ask for 30s and get 4.
+  const s = buildSchedule(
+    plan({ durationWasSet: true, scrollDurationS: 30,
+      timeline: [{ type: 'scroll', to: parseTarget('100%'), duration: 4, action: null, actionAt: 'start', label: 'x' }] }),
+    CTX
+  );
+  assert.equal(s.totalDurationS, 4);
+  assert.match(s.warnings.join(' '), /--duration 30s was ignored/);
+});
+
+test('--fixed-duration with nothing to compress is an error, not a stretched hold', () => {
+  // This used to inflate a declared 3s hold to 8s while --dry-run said 3s.
+  assert.throws(
+    () => buildSchedule(
+      plan({ fixedDuration: true, scrollDurationS: 10,
+        timeline: [{ type: 'hold', at: null, duration: 2, action: null, actionAt: 'start', label: 'a' },
+                   { type: 'hold', at: null, duration: 3, action: null, actionAt: 'start', label: 'b' }] }),
+      CTX
+    ),
+    /needs something to compress/
+  );
+});
+
+test('WARNS when a zero-frame segment takes its action with it', () => {
+  const s = buildSchedule(
+    plan({ fps: 60, scrollDurationS: 10,
+      timeline: [
+        { type: 'scroll', to: parseTarget('50%'), duration: 5, action: null, actionAt: 'start', label: 'a' },
+        { type: 'scroll', to: parseTarget('50%'), duration: 0.004, action: () => {}, actionAt: 'start', label: 'fire me' },
+        { type: 'scroll', to: parseTarget('100%'), duration: 5, action: null, actionAt: 'start', label: 'c' }] }),
+    CTX
+  );
+  assert.equal(s.frames.filter((f) => f.actions.length).length, 0, 'the action really is lost');
+  assert.match(s.warnings.join(' '), /"fire me" is shorter than one frame/);
+  assert.match(s.warnings.join(' '), /along with its action/);
+});

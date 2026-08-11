@@ -80,6 +80,31 @@ test('every examples/ file the docs link to exists', () => {
   }
 });
 
+test('the demo media the README shows actually exists', () => {
+  const readme = read('README.md');
+  const refs = new Set([...readme.matchAll(/(?:src=")?(docs\/[\w.-]+\.(?:gif|mp4|png|webm))/g)].map((m) => m[1]));
+  assert.ok(refs.size > 0, 'the README references no demo media at all');
+  for (const f of refs) {
+    assert.ok(fs.existsSync(path.join(ROOT, f)), `README references ${f}, which does not exist`);
+  }
+});
+
+test('DRIFT GUARD: every demo video the README shows survives the ignore rules', () => {
+  // *.mp4 is ignored wholesale, so each demo needs its own negation or it is
+  // simply absent for anyone who clones the repo.
+  const readme = read('README.md');
+  const ignore = read('.gitignore');
+  const videos = new Set([...readme.matchAll(/(docs\/[\w.-]+\.(?:mp4|webm))/g)].map((m) => m[1]));
+  assert.ok(videos.size > 0, 'the README links no demo video');
+  for (const v of videos) {
+    assert.match(
+      ignore,
+      new RegExp('^!' + v.replace(/[.]/g, '\\.') + '$', 'm'),
+      `${v} is linked from the README but would be git-ignored`
+    );
+  }
+});
+
 test('no em dashes in the agent-facing docs', () => {
   for (const f of ['AGENTS.md', 'CLAUDE.md', 'examples/README.md', 'hooks/README.md']) {
     const lines = read(f)

@@ -135,9 +135,15 @@ function build({ config, explicit = new Set(), planModule = null, scriptModule =
     headless: !merged.headed,
     waitS: merged.wait,
     warmup: merged.warmup,
+    // Backstops so an infinite-scroll page cannot wedge the warm-up forever.
+    warmupMaxSteps: 400,
+    warmupBudgetMs: 90000,
 
     fixedDuration: Boolean(merged['fixed-duration']),
     scrollDurationS: merged.duration,
+    // Whether the user actually asked for a duration, so the schedule can warn
+    // when it turns out to be unused rather than silently discarding it.
+    durationWasSet: explicit.has('duration') || (planModule ? planModule.duration !== undefined : false),
     pauses,
     timeline,
 
@@ -147,8 +153,9 @@ function build({ config, explicit = new Set(), planModule = null, scriptModule =
     clock: {
       enabled: Boolean(merged.clock),
       // Freezing CSS to frame time while JS still runs at wall-clock would be
-      // worse than doing neither, so --no-clock turns this off too.
+      // worse than doing neither, so --no-clock turns these off too.
       css: merged.clock ? merged.css : 'off',
+      video: merged.clock ? merged.video : 'off',
       restartAnimations: Boolean(merged['restart-animations']),
       shadow: Boolean(merged['shadow-animations']),
     },

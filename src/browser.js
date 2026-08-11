@@ -65,16 +65,36 @@ async function prepare(page, plan, log, runHook) {
   // the page first, let it settle, then measure the stable height.
   if (plan.warmup) {
     log('  warming up (loading lazy content so the footer is not clipped)…');
-    await page.evaluate(async (vh) => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const step = Math.max(200, Math.floor(vh * 0.8));
-      for (let y = 0; y < document.documentElement.scrollHeight; y += step) {
-        window.scrollTo(0, y);
-        await sleep(150);
-      }
-      window.scrollTo(0, document.documentElement.scrollHeight);
-      await sleep(400);
-    }, plan.viewport.height);
+    const warm = await page.evaluate(
+      async ({ vh, maxSteps, budgetMs }) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const step = Math.max(200, Math.floor(vh * 0.8));
+        const deadline = Date.now() + budgetMs;
+        let steps = 0;
+        // scrollHeight is re-read each pass so a page that grows as you scroll
+        // keeps the loop going. On an infinite-scroll page that never ends, so
+        // both a step cap and a wall-clock budget are required: page.evaluate
+        // has no timeout, and without these the whole run wedges here silently.
+        let y = 0;
+        for (; y < document.documentElement.scrollHeight; y += step) {
+          window.scrollTo(0, y);
+          await sleep(150);
+          if (++steps >= maxSteps || Date.now() > deadline) {
+            return { capped: true, steps, height: document.documentElement.scrollHeight };
+          }
+        }
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        await sleep(400);
+        return { capped: false, steps, height: document.documentElement.scrollHeight };
+      },
+      { vh: plan.viewport.height, maxSteps: plan.warmupMaxSteps, budgetMs: plan.warmupBudgetMs }
+    );
+    if (warm.capped) {
+      log(
+        `  ⚠ warm-up stopped after ${warm.steps} steps (the page keeps growing; it may be ` +
+          `infinite-scroll). Recording what loaded, which may clip the footer.`
+      );
+    }
     await page.waitForLoadState('networkidle').catch(() => {}); // let late loads finish
     await page.waitForTimeout(500);
     await page.evaluate(() => window.scrollTo(0, 0));

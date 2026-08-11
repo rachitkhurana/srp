@@ -42,6 +42,9 @@ const EPOCH_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
 const MARGIN_MS = 1000;
 const SNAP_MS = 1000;
 
+/** Give up waiting for a vsync after this long. See BARRIER. */
+const BARRIER_TIMEOUT_MS = 2000;
+
 /*
  * Registered before clock.install() so it sees the real requestAnimationFrame.
  * __srpBirth is used by animations.js to date animations it has already seen.
@@ -58,20 +61,35 @@ const INIT_SCRIPT = `(() => {
  * and any style we just seeked. Falls back to playwright's own stashed
  * builtins, then — only if the clock is not installed — to the page's rAF.
  */
-const BARRIER = () =>
+const BARRIER = (timeoutMs) =>
   new Promise((resolve) => {
     const pw = globalThis.__pwClock && globalThis.__pwClock.builtins;
     const raf = window.__srpRaf || (pw && pw.requestAnimationFrame) || window.requestAnimationFrame;
     const call = raf.bind(window);
-    call(() => call(resolve));
+    // Chromium stops issuing animation frames to an occluded or minimised
+    // window, so under --headed this can never resolve. page.evaluate has no
+    // timeout, so an unguarded wait wedges the whole recording. Fall back to
+    // the real timer, which is not faked at the Node boundary.
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    };
+    const bail = (globalThis.__pwClock && globalThis.__pwClock.builtins && globalThis.__pwClock.builtins.setTimeout) || null;
+    if (bail) bail.call(window, finish, timeoutMs);
+    call(() => call(finish));
   });
 
 /** Must run before install() and before goto(). */
 async function installEarly(page) {
   await page.addInitScript(INIT_SCRIPT);
-  // The animation seeker lives in an init script too, so its source is sent
-  // once rather than re-serialised on every frame.
+  // The seekers live in init scripts too, so their source is sent once rather
+  // than re-serialised on every frame. addInitScript reaches every frame of
+  // the page, including iframes.
   await page.addInitScript(require('./animations').INIT_SCRIPT);
+  await page.addInitScript(require('./videos').INIT_SCRIPT);
 }
 
 /** Must run before goto(): libraries capture Date.now at module-eval time. */
@@ -105,8 +123,11 @@ async function stepTo(page, baseMs, tMs) {
   await page.clock.pauseAt(baseMs + tMs);
 }
 
-async function paintBarrier(page) {
-  await page.evaluate(BARRIER);
+async function paintBarrier(page, timeoutMs = BARRIER_TIMEOUT_MS) {
+  await page.evaluate(BARRIER, timeoutMs);
 }
 
-module.exports = { installEarly, install, begin, stepTo, paintBarrier, EPOCH_MS, MARGIN_MS, SNAP_MS, INIT_SCRIPT };
+module.exports = {
+  installEarly, install, begin, stepTo, paintBarrier,
+  EPOCH_MS, MARGIN_MS, SNAP_MS, BARRIER_TIMEOUT_MS, INIT_SCRIPT,
+};
