@@ -8,10 +8,12 @@ Your own files belong in [`../hooks/`](../hooks/), which is git-ignored.
 
 ## Which one do I want?
 
-**Neither, probably.** A plain scroll with a couple of stops needs no file:
+**Neither, probably.** A plain scroll with a couple of stops needs no file, and
+neither does easing:
 
 ```bash
 srp https://my-site.com 20 --pause 40%:2 --pause '#pricing:1.5'
+srp https://my-site.com 20 --ease ramp
 ```
 
 **`--script`** when you only need to prepare the page and tidy up afterwards.
@@ -38,7 +40,7 @@ srp --plan examples/basic.plan.cjs --url https://my-site.com
 | `basic.plan.cjs` | The smallest `--plan` file: three steps and one hold |
 | `reference.plan.cjs` | Every supported key, annotated with the rules the validator actually enforces |
 | `recipes.plan.cjs` | The patterns worth copying, each with its reasoning |
-| `airpods-pro.plan.cjs` | The recording in [`../docs/demo.gif`](../docs/demo.gif): hold on the hero, advance a carousel mid-capture, then scroll 27000px |
+| `airpods-pro.plan.cjs` | The recording in [`../docs/airpods-pro.gif`](../docs/airpods-pro.gif): hold on the hero, advance a carousel mid-capture, then scroll 27000px |
 | `uh-ring.plan.cjs` | Click a replay button on frame 0, hold 6s while the hero video plays at true speed, then scroll 22000px |
 
 Both of the real-page examples are worth reading for the same two reasons: the click has to be a

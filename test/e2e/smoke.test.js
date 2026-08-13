@@ -46,6 +46,8 @@ describe('end-to-end recording', { skip: chromiumMissing() && 'chromium is not i
   let tmp;
   let runs;
   let statics;
+  let eased;
+  let ramped;
 
   const record = (tag, args) => {
     const out = path.join(tmp, `${tag}.mp4`);
@@ -66,6 +68,21 @@ describe('end-to-end recording', { skip: chromiumMissing() && 'chromium is not i
       statics = ['sa', 'sb'].map((tag) =>
         record(tag, [STATIC_FIXTURE, '0.5', '--fps', '10', '--width', '320', '--height', '240', '--wait', '0', '--no-warmup'])
       );
+      // The same static fixture on a curve. Still a pure function of scroll
+      // position, so easing must not cost anything in determinism.
+      eased = ['ea', 'eb'].map((tag) =>
+        record(tag, [
+          STATIC_FIXTURE, '2',
+          '--fps', '10', '--width', '320', '--height', '240', '--wait', '0', '--no-warmup',
+          '--ease', 'power2.inOut',
+        ])
+      );
+      // And on a ramp: 0.5s up, 3s of constant speed, 0.5s down.
+      ramped = record('ra', [
+        STATIC_FIXTURE, '4',
+        '--fps', '10', '--width', '320', '--height', '240', '--wait', '0', '--no-warmup',
+        '--ease-in', '0.5', '--ease-out', '0.5',
+      ]);
     },
     { timeout: 300000 }
   );
@@ -92,6 +109,90 @@ describe('end-to-end recording', { skip: chromiumMissing() && 'chromium is not i
     assert.equal(a.length, 5);
     assert.deepEqual(a, b, 'a static page must record identically every time');
     assert.equal(md5(statics[0].out), md5(statics[1].out), 'and encode identically too');
+  });
+
+  it('easing keeps the determinism guarantee, to the byte', () => {
+    const [a, b] = eased.map((r) => r.meta.frames.map((f) => md5(path.join(r.dir, f.file))));
+    assert.equal(a.length, 20);
+    assert.deepEqual(a, b, 'an eased recording must reproduce exactly, same as a linear one');
+    assert.equal(md5(eased[0].out), md5(eased[1].out), 'and encode identically too');
+  });
+
+  it('an eased scroll really accelerates and decelerates, through the browser', () => {
+    const meta = eased[0].meta;
+    assert.equal(meta.ease, 'power2.inOut');
+    assert.deepEqual(meta.runs.map((r) => r.ease), ['power2.inOut']);
+
+    const ys = meta.frames.map((f) => f.y);
+    assert.equal(ys[0], 0, 'starts at the top');
+    assert.equal(ys[ys.length - 1], meta.segments[0].y1, 'and lands exactly on the target, not near it');
+
+    const dy = ys.slice(1).map((y, i) => y - ys[i]);
+    const mean = dy.reduce((a, b) => a + b, 0) / dy.length;
+    assert.ok(dy.every((v) => v >= 0), 'never scrolls backwards');
+    assert.ok(Math.max(...dy) / mean > 2.5, `a cubic inOut peaks near 3x the mean rate, got ${Math.max(...dy) / mean}`);
+    assert.ok(dy[0] < mean / 10, `starts from rest, first step was ${dy[0]}px against a mean of ${mean}px`);
+
+    // Deliberately NOT asserted here: that the head frames are pixel-identical.
+    // They are at any real setting (60fps over 1760px puts the first step at
+    // 0.004px) but this run is 20 frames on purpose, which makes the first step
+    // 1.03px and moves a real pixel. The claim is about sub-pixel steps, not
+    // about easing, so pinning it here would only pin the toy frame count.
+    const hashes = meta.frames.map((f) => md5(path.join(eased[0].dir, f.file)));
+    const peak = dy.indexOf(Math.max(...dy));
+    const middle = [peak - 1, peak, peak + 1].map((i) => hashes[i]);
+    assert.equal(new Set(middle).size, 3, 'every frame through the fast middle must be distinct');
+  });
+
+  it('a ramp really does cruise at one constant speed, through the browser', () => {
+    const meta = ramped.meta;
+    const [run] = meta.runs;
+    assert.equal(run.ramp.inS, 0.5);
+    assert.equal(run.ramp.outS, 0.5);
+    assert.equal(run.ramp.clamped, false);
+    assert.ok(Math.abs(run.ramp.cruiseS - 3) < 1e-9);
+
+    const ys = meta.frames.map((f) => f.y);
+    assert.equal(ys[0], 0, 'starts at the top');
+    assert.equal(ys[ys.length - 1], meta.segments[0].y1, 'lands exactly on the target');
+
+    const dy = ys.slice(1).map((y, i) => y - ys[i]);
+    // 40 frames over 4s: 0.5s of ramp is 5 frames at each end. Sample well
+    // inside the flat part so the corners cannot leak in.
+    const cruise = dy.slice(7, dy.length - 7);
+    assert.ok(cruise.length > 20, `only ${cruise.length} cruise frames`);
+    assert.ok(Math.max(...cruise) - Math.min(...cruise) < 1e-9, 'the middle must be dead flat');
+    assert.ok(dy[0] < cruise[0] / 5, `and it starts from rest (${dy[0]}px vs ${cruise[0]}px cruising)`);
+    assert.ok(dy[dy.length - 1] < cruise[0] / 5, 'and settles to a stop');
+
+    // The quoted px/s must match what the frames actually do. The interval is
+    // totalS/(N-1), not 1/fps: frames are inclusive endpoints of the timeline.
+    const interval = 4 / (meta.frames.length - 1);
+    assert.ok(Math.abs(cruise[0] / interval - run.ramp.speed) < 0.01, `${cruise[0] / interval} vs ${run.ramp.speed}`);
+  });
+
+  it('THE JUDDER FIX: no two frames of a ramp render the same pixels', () => {
+    /*
+     * scrollTo snaps to whole CSS pixels (deviceScaleFactor does not change
+     * that), so a ramp crawling below 1px/frame produces literally identical
+     * screenshots, then a jump. That is the judder. The velocity floor starts
+     * the ramp at 2px/frame instead of zero, so every frame moves.
+     *
+     * On a static fixture the pixels are a pure function of scroll position, so
+     * "the bytes differ" is exactly "the scroll moved".
+     */
+    assert.equal(ramped.meta.runs[0].ramp.floorPx, 2, 'the floor should be on by default');
+
+    const hashes = ramped.meta.frames.map((f) => md5(path.join(ramped.dir, f.file)));
+    const repeats = hashes.filter((h, i) => i > 0 && h === hashes[i - 1]).length;
+    assert.equal(repeats, 0, `${repeats} consecutive frames are byte-identical, i.e. the scroll stalled`);
+    assert.equal(new Set(hashes).size, hashes.length, 'every frame should be distinct');
+
+    // And the rendered scroll positions really do advance a whole pixel each time.
+    const px = ramped.meta.frames.map((f) => Math.round(f.y));
+    for (let i = 1; i < px.length; i++) {
+      assert.ok(px[i] > px[i - 1], `frame ${i} did not advance a pixel (${px[i - 1]} -> ${px[i]})`);
+    }
   });
 
   it('an animated page reproduces frame for frame', () => {

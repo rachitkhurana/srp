@@ -1,6 +1,6 @@
 # srp
 
-**Record a perfectly smooth, dead-linear scroll of any webpage to video.**
+**Record a perfectly smooth scroll of any webpage to video.**
 
 *screen record playwright*
 
@@ -28,7 +28,7 @@ That buys three things a real-time recorder cannot give you:
 
 |  |  |
 |---|---|
-| **No jitter, ever** | Scroll offset is a pure function of frame index, so the motion has no easing and no dropped frames by construction. |
+| **No jitter, ever** | Scroll offset is a pure function of frame index, so there are no dropped or duplicated frames by construction. Dead linear by default, or on a curve you name with [`--ease`](#easing). |
 | **Exact length** | A 20 second scroll is 20.000 seconds of video. A slow machine takes longer to render; it does not produce a worse file. |
 | **Animation at true speed** | Page time is stepped one frame at a time, so a 7.5s video loop takes 7.5s of finished video no matter how long each frame took to capture. |
 
@@ -55,6 +55,9 @@ srp https://site.com 20 --out demo.mp4
 
 # hold 2s at 40%, and 1.5s on the pricing section
 srp https://site.com 20 --pause 40%:2 --pause '#pricing:1.5'
+
+# fade up to speed, cruise, fade back down, like a video fade
+srp https://site.com 20 --ease ramp
 
 # see the frame schedule without spending a render
 srp https://site.com 20 --pause 40%:2 --dry-run
@@ -99,6 +102,174 @@ $ srp https://site.com 10 --pause 50%:2 --dry-run
    1  hold    hold @ 880px     2s      frames 300..419  (120)
    2  scroll  880 -> 1760px    5s      frames 420..719  (300)
 ```
+
+---
+
+## Easing
+
+A linear scroll starts and stops instantly, which is the one thing that reads as machine-driven.
+There are two ways to fix that, and on a long page they are not interchangeable.
+
+### Ramps: fade in, cruise, fade out
+
+The one you want for a real page. Accelerate for a fixed number of seconds, hold **one constant
+speed**, decelerate for a fixed number of seconds. Exactly how a fade works in video or audio:
+
+```bash
+srp https://site.com 40 --ease ramp                   # 1.5s at each end
+srp https://site.com 40 --ease-in 2 --ease-out 4      # asymmetric
+srp https://site.com 40 --ease-out 1.5 --ease-in 0    # settle only, no fade in
+srp https://site.com 40 --ease-in 10%                 # relative, if you prefer
+```
+
+Naming either side switches ramp mode on; the side you leave out gets the 1.5s default, and `0`
+switches a side off.
+
+**The ramp length is in seconds, not a fraction of the run.** This is the whole point, and it is the
+thing a curve cannot do. The same 1.5s fade on a 5 second scroll and a 40 second one:
+
+```
+$ srp page.html 5  --ease ramp --dry-run
+    run 1  frames 0..299     up 1.5s · cruise 2s at 211px/s · down 1.5s · from 2px/frame
+
+$ srp page.html 40 --ease ramp --dry-run
+    run 1  frames 0..2399    up 1.5s · cruise 37s at 24px/s · down 1.5s
+    ⚠ 1479 frames that do not move a whole pixel
+```
+
+(That second one is a 920px fixture dragged out over 40 seconds, so it crawls at 24px/s and there is
+no `from 2px/frame` on it. See [the floor](#why-a-ramp-does-not-start-from-a-dead-stop) below.)
+
+The cruise speed comes out as `distance / (duration - (in + out) × (1 - mean))`, where `mean` is the
+share of full-speed ground a ramp covers. For every named shape that is exactly a half, giving the
+familiar `duration - (in + out) / 2`. Either way it lands within a few percent of the plain average,
+so `--duration` goes back to being the only thing that sets your pace.
+
+If a leg is shorter than its ramps, both are scaled down to fit and you get a warning. The profile
+then has no cruise at all and peaks at twice its average, so the fix is to give that step a longer
+`duration`.
+
+#### Ramp shape
+
+`--ease-shape` picks how pronounced the corners are. **Reach for this to make the easing stronger; a
+longer ramp does not do that**, it just spends more of the video winding up and down. Listed gentlest
+to steepest by the steepest slope the ramp reaches, and none of them change the cruise speed:
+
+| `--ease-shape` | peak slope | |
+|---|---|---|
+| `linear` | 1.0 | constant acceleration, a true trapezoid. Snaps very slightly into the cruise |
+| `smooth` | 1.5 | smoothstep. The default |
+| `sine` | 1.571 | fractionally steeper than `smooth`, not gentler |
+| `smoother` | 1.875 | smootherstep. Flatter at the ends, steeper through the middle |
+| `smoothest` | 2.188 | the most pronounced of the named shapes |
+| `cubic-bezier(x1,y1,x2,y2)` | any | the escape hatch, and it can go steeper still |
+
+```bash
+srp https://site.com 40 --ease-in 0.5 --ease-out 0.5 \
+  --ease-shape "cubic-bezier(.65,0,.25,.99)"     # peaks at 3.34x
+```
+
+Quote the bezier, the parens are shell syntax. Note it describes the **velocity** through the ramp,
+not a position curve, so it must not dip below zero: that would scroll backwards mid-fade, and srp
+refuses it. Above 1 is fine and overshoots the cruise speed before settling back.
+
+#### Why a ramp does not start from a dead stop
+
+`window.scrollTo` snaps the scroll offset to **whole CSS pixels**, and `deviceScaleFactor` makes no
+difference to that. So any scroll moving slower than one pixel per frame renders as a hold followed
+by a jump, which reads as judder. The rendered steps at the head of a ramp starting from zero, pulled
+from a real recording:
+
+```
+0 0 0 0 0 0 1 0 0 0 1 1 0 1 1 1 1 1 1 2 2 1     20 byte-identical frames
+```
+
+A longer ramp makes it worse, because more frames land in the sub-pixel region. So a ramp starts at
+`--ease-floor` pixels per frame, default **2**, rather than at zero. Same recording with the floor on:
+
+```
+2 2 2 2 2 2 2 3 2 2 2 3 2 3 2 3 2 3 3 3 3 3     none
+```
+
+It costs a few percent of the cruise speed and nothing else, and the scroll still lands exactly on
+target. `--ease-floor 0` starts from a true standstill and accepts the stepping.
+
+The floor can only engage when the run is faster than the floor to begin with. On a scroll that
+averages less than 2px per frame there is no headroom to ramp through, so srp turns the floor off for
+that leg and tells you, with the frame count and the one fix that helps: give the step less time, so
+it covers more ground per frame. It warns about sub-pixel frames on any scroll, eased or not.
+
+### Curves: one shape stretched over the whole run
+
+Useful on a short clip, where there is no room for a cruise phase anyway:
+
+```bash
+srp https://site.com 6 --ease power2.inOut
+```
+
+Be aware of what this does on a long page: the curve is normalised to the run, so on a 38 second leg
+`sine.inOut` spends the first 19 seconds accelerating and the last 19 decelerating, and never holds a
+speed. That is what ramps exist to fix.
+
+The vocabulary is GSAP's, since that is what most people reaching for a curve already have in their
+head. Each family takes `.in`, `.out` or `.inOut`:
+
+| Curve | Shape |
+|---|---|
+| `linear` | constant rate. The default, and aliased as `none`, `power0`, `off` |
+| `sine.*` | the gentlest curve |
+| `power1.*` | quadratic |
+| `power2.*` | cubic. The workhorse: `power2.inOut` peaks at 3x the average rate |
+| `power3.*` | quartic |
+| `power4.*` | quintic, the steepest |
+| `cubic-bezier(x1,y1,x2,y2)` | anything else. Quote it, the parens are shell syntax |
+
+`.in` accelerates from rest, `.out` decelerates to a stop, `.inOut` does both.
+
+The `x` values of a `cubic-bezier` must be between 0 and 1. The `y` values need not be: putting one
+outside that range makes the scroll overshoot its target and settle back, which is a real effect and
+not clamped away. It is bounded by the page, though. Overshooting a target that already is the bottom
+of the document just parks there for a few frames, since there is nowhere further to go.
+
+### Both modes
+
+**Easing warps time, not distance.** A frame's position is still a pure function of its index, so the
+determinism guarantee is untouched: the same command produces the same frames, and the last frame
+still lands exactly at the target.
+
+**It applies per stretch of continuous motion, and a hold ends a stretch.** That means `--pause`
+needs no extra thought: each leg decelerates into its pause and accelerates out of it.
+
+```
+$ srp https://site.com 10 --pause 50%:2 --ease power2.inOut --dry-run
+  extent 1760px · 12s total (10s scroll + 2s held) · 60fps · 720 frames
+   0  scroll  0 -> 880px       5s      frames 0..299    (300)
+   1  hold    hold @ 880px     2s      frames 300..419  (120)
+   2  scroll  880 -> 1760px    5s      frames 420..719  (300)
+  ease power2.inOut over 2 motion runs (frames 0..299, 420..719)
+```
+
+Two adjacent scroll steps in a timeline with no hold between them are eased **together**, as one
+movement, so the scroll does not stall at the waypoint. That is usually what you want. When it is
+not, give a step its own `ease` and it becomes its own run, timed exactly as declared:
+
+```js
+timeline: [
+  { scrollTo: '50%', duration: 4 },                      // these two ease
+  { scrollTo: '#gallery', duration: 6 },                 //   as one movement
+  { scrollTo: '100%', duration: 4, ease: 'power4.out' }, // this one on its own
+]
+```
+
+The trade-off in a merged run is that a declared waypoint time shifts, because the clock along the
+run is warped. `--dry-run` always prints which segments got grouped, so you can see it before you
+spend a render.
+
+One consequence of the pixel snapping above applies to **curve mode too, with no way to fix it**: at
+the head and tail of a curve the per-frame step is sub-pixel, so consecutive frames are identical and
+the scroll steps. At 60fps over a 1760px page, `power2.inOut` moves 0.004px between the first two
+frames. A curve has no ramp region, so `--ease-floor` cannot apply to it. srp warns when it happens.
+If it bothers you, that is what ramp mode is for.
 
 ---
 
@@ -163,6 +334,7 @@ A step is either a scroll or a hold, never both. These are all the keys it takes
 | `hold` | hold | How long to hold, in seconds. This *is* the length, so do not also pass `duration` |
 | `at` | hold | Where to hold. Omit it to hold wherever the previous step ended, which is usual |
 | `duration` | scroll | Seconds. Omit it to share the top-level budget with the other open-ended steps |
+| `ease` | scroll | Overrides `--ease` for this step, and makes it its own easing run. See [Easing](#easing) |
 | `action` | either | `async (page, ctx) => {}`, fired on one frame of this step |
 | `actionAt` | either | `'start'` (default) or `'end'`: the step's first or last frame |
 | `label` | either | Shown in `--dry-run` and in log lines |
@@ -279,6 +451,11 @@ If a page misbehaves with faked timers (a consent SDK that polls, a player that 
 | `url` *(positional)* / `--url` | `http://localhost:3000` | Page to record. A bare host like `localhost:5173` gets `http://`; a path like `./index.html` becomes a `file://` URL. |
 | `duration` *(positional)* / `-d`, `--duration` | `10` | Scroll-motion seconds. Pauses add on top unless `--fixed-duration`. |
 | `--fixed-duration` | *(off)* | Make `--duration` the hard total and compress the scroll to fit the pauses. |
+| `--ease <curve\|ramp>` | `linear` | Easing mode. `ramp` for fixed fades with a constant-speed middle, or a curve: `sine.*`, `power1..power4.*` (each `.in`/`.out`/`.inOut`), `cubic-bezier(a,b,c,d)`. See [Easing](#easing). |
+| `--ease-in <sec\|%>` | | Ramp up from a standstill over this long, then cruise. Implies `--ease ramp`; the other side defaults to `1.5s`. |
+| `--ease-out <sec\|%>` | | Ramp back down to a standstill over this long. `0` switches that fade off. |
+| `--ease-shape <shape>` | `smooth` | Ramp corner shape, gentlest to steepest: `linear`, `smooth`, `sine`, `smoother`, `smoothest`, or a `cubic-bezier(a,b,c,d)`. |
+| `--ease-floor <px>` | `2` | Least a ramp may move per frame. Below 1px the scroll visibly steps. `0` starts from a dead stop. |
 | `--pause <target>:<sec>` | | Hold at a point. Repeatable. |
 | `--plan <file>` | | A `.js` file exporting `{ timeline, before, after }`. |
 | `--script <file>` | | A `.js` file exporting `{ before, after }`. |
@@ -307,7 +484,7 @@ If a page misbehaves with faked timers (a consent SDK that polls, a player that 
 
 ```
 ▶ Recording https://your-site.com
-  1920x1080 · 60fps
+  1920x1080 · 60fps                       ← plus "· ease …" when easing is on
   waiting 3s for the page to settle…
   warming up (loading lazy content so the footer is not clipped)…
   scroll extent: 12000px (page grew 600px during warm-up)
@@ -334,8 +511,13 @@ for. Use `--dry-run` to check the plan before committing to a render.
   `before`.
 - **Don't navigate inside a per-frame action.** Each clock step registers an init script that a
   navigation would replay into the new document.
+- **Scroll looking steppy?** The scroll offset snaps to whole CSS pixels, so anything moving slower
+  than 1px per frame holds and then jumps. srp warns with a frame count when it spots this. The usual
+  cause is simply a long `--duration` over a short page: give that step less time. See
+  [Easing](#why-a-ramp-does-not-start-from-a-dead-stop) for the full story and `--ease-floor`.
 - **Output is exactly the viewport size.** `deviceScaleFactor` is `1`, so `1920x1080` in gives
-  `1920x1080` out. Retina capture is not wired up yet.
+  `1920x1080` out. Retina capture is not wired up yet, and it would not help the stepping above:
+  the scroll quantises to CSS pixels at every scale factor.
 - **MP4 vs WebM.** MP4/H.264 (`yuv420p`, `+faststart`) plays everywhere; WebM/VP9 is smaller. Pick
   with the `--out` extension.
 

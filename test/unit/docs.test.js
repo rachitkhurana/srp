@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { loadUserModule } = require('../../src/loader');
-const { build, validate } = require('../../src/plan');
+const { build, validate, STEP_KEYS, RESERVED_STEP_KEYS } = require('../../src/plan');
 const { parse, OPTIONS } = require('../../src/options');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -48,11 +48,18 @@ for (const file of exampleFiles) {
   });
 }
 
-test('the reference example really does cover every step key', () => {
+test('DRIFT GUARD: the reference example really does cover every step key', () => {
+  // Derived from STEP_KEYS rather than listed here, so a new step key cannot be
+  // added without the reference example growing to document it. Reserved keys
+  // are excluded: they exist only to be rejected.
   const src = read('examples/reference.plan.cjs');
-  // resolveAt is deliberately excluded: it is reserved and rejected.
-  for (const key of ['scrollTo', 'hold', 'at', 'duration', 'action', 'actionAt', 'label']) {
-    assert.match(src, new RegExp(`\\b${key}\\b`), `reference.plan.cjs never mentions "${key}"`);
+  const documented = STEP_KEYS.filter((k) => !RESERVED_STEP_KEYS.includes(k));
+  assert.ok(documented.length >= 8, 'suspiciously few step keys');
+  for (const key of documented) {
+    // As a key, not merely as a word: "ease" appears in the prose of this file
+    // ("teleports rather than eases"), which was enough to satisfy a \bkey\b
+    // match and let a genuinely undocumented key through.
+    assert.match(src, new RegExp(`\\b${key}:`), `reference.plan.cjs does not use "${key}:" as a step key`);
   }
 });
 
@@ -80,13 +87,25 @@ test('every examples/ file the docs link to exists', () => {
   }
 });
 
-test('the demo media the README shows actually exists', () => {
-  const readme = read('README.md');
-  const refs = new Set([...readme.matchAll(/(?:src=")?(docs\/[\w.-]+\.(?:gif|mp4|png|webm))/g)].map((m) => m[1]));
-  assert.ok(refs.size > 0, 'the README references no demo media at all');
-  for (const f of refs) {
-    assert.ok(fs.existsSync(path.join(ROOT, f)), `README references ${f}, which does not exist`);
+test('DRIFT GUARD: every docs/ asset any doc points at actually exists', () => {
+  // Not just the README: examples/README.md and the example headers link to the
+  // demo media too, and a renamed file rots those links silently. That is
+  // exactly what happened to docs/demo.gif when it became airpods-pro.gif.
+  const sources = [
+    'README.md', 'AGENTS.md', 'examples/README.md', 'hooks/README.md',
+    ...fs.readdirSync(EXAMPLES).filter((f) => /\.(cjs|mjs|js)$/.test(f)).map((f) => `examples/${f}`),
+  ];
+  let total = 0;
+  for (const src of sources) {
+    const refs = new Set(
+      [...read(src).matchAll(/(?:\.\.\/)?(docs\/[\w.-]+\.(?:gif|mp4|png|webm))/g)].map((m) => m[1])
+    );
+    for (const f of refs) {
+      total++;
+      assert.ok(fs.existsSync(path.join(ROOT, f)), `${src} references ${f}, which does not exist`);
+    }
   }
+  assert.ok(total > 0, 'the docs reference no demo media at all');
 });
 
 test('DRIFT GUARD: every demo video the README shows survives the ignore rules', () => {

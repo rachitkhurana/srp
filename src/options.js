@@ -14,6 +14,10 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { parseArgs } = require('node:util');
 const { UsageError } = require('./errors');
+const {
+  parseEase, parseRampLength, parseRampShape,
+  RAMP_SHAPE_NAMES, RAMP_DEFAULT_S, FLOOR_DEFAULT_PX,
+} = require('./easing');
 
 /** H.264 and VP9 both need even frame dimensions. */
 const even = (n) => Math.max(2, Math.round(n / 2) * 2);
@@ -51,6 +55,40 @@ const OPTIONS = [
   {
     name: 'fixed-duration', group: 'Timing', type: 'bool', default: false,
     help: 'make --duration the hard total and compress the scroll to fit the pauses',
+  },
+  {
+    name: 'ease', group: 'Timing', type: 'string', default: 'linear', meta: '<curve|ramp>',
+    // Coerced to the canonical name, so config.ease stays a plain string and a
+    // bad curve fails during argument parsing rather than mid-render. "ramp"
+    // is a mode rather than a curve: it needs --ease-in/--ease-out to resolve,
+    // which happens in plan.js.
+    coerce: (v) => (String(v).trim().toLowerCase() === 'ramp' ? 'ramp' : parseEase(v).name),
+    help: 'easing mode: linear | ramp | a curve (sine.inOut, power1..power4.*, cubic-bezier(a,b,c,d))',
+  },
+  {
+    // Validate at parse time so a bad length fails on the command line rather
+    // than mid-render; the value itself stays a string, because "15%" cannot be
+    // turned into seconds until the run's duration is known.
+    name: 'ease-in', group: 'Timing', type: 'string', default: null, meta: '<sec|%>',
+    coerce: (v) => (parseRampLength(v, '--ease-in'), String(v).trim()),
+    help: `ramp up from a standstill over this long, then cruise (default ${RAMP_DEFAULT_S}s when ramping)`,
+  },
+  {
+    name: 'ease-out', group: 'Timing', type: 'string', default: null, meta: '<sec|%>',
+    coerce: (v) => (parseRampLength(v, '--ease-out'), String(v).trim()),
+    help: 'ramp back down to a standstill over this long; 0 switches that fade off',
+  },
+  {
+    name: 'ease-shape', group: 'Timing', type: 'string', default: 'smooth',
+    // No `choices`: a cubic-bezier can never be in a fixed list, so validation
+    // and canonicalisation both go through the easing module.
+    meta: '<shape>', coerce: (v) => parseRampShape(v).name,
+    help: `ramp corner shape, gentlest to steepest: ${RAMP_SHAPE_NAMES.join(', ')}, or cubic-bezier(a,b,c,d)`,
+  },
+  {
+    name: 'ease-floor', group: 'Timing', type: 'number', default: FLOOR_DEFAULT_PX,
+    allowZero: true, meta: '<px>',
+    help: 'least a ramp may move per frame; below 1 the scroll visibly steps. 0 to start from a dead stop',
   },
   {
     name: 'pause', group: 'Timeline', type: 'string', multiple: true, default: [],
@@ -176,7 +214,7 @@ function renderHelp(opts = OPTIONS) {
     .join('\n\n');
 
   return `
-srp: record a perfectly smooth, dead-linear scroll of a webpage to video
+srp: record a perfectly smooth scroll of a webpage to video
 
 Usage:
   srp [url] [duration] [options]
@@ -188,10 +226,16 @@ Positional (both optional):
 
 ${body}
 
+Ease curves:
+  linear (default)  ·  sine.*  ·  power1.* power2.* power3.* power4.*
+  each family takes .in, .out or .inOut, e.g. --ease power2.inOut
+  or --ease "cubic-bezier(0.65, 0, 0.35, 1)" for anything else
+
 Examples:
   srp http://localhost:3000 15
   srp --url https://rachitkay.com --duration 8 --out hero.webm
   srp ./index.html 6 --width 1280 --height 720
+  srp https://site.com 20 --ease power2.inOut --pause 40%:2
 `;
 }
 

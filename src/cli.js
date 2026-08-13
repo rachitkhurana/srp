@@ -48,7 +48,10 @@ async function main(argv) {
     const plan = planning.validate(planning.build({ config, explicit, planModule, scriptModule }, io.warn));
 
     io.log(`▶ Recording ${plan.url}`);
-    io.log(`  ${plan.viewport.width}x${plan.viewport.height} · ${plan.fps}fps`);
+    io.log(
+      `  ${plan.viewport.width}x${plan.viewport.height} · ${plan.fps}fps` +
+        (plan.ease.linear ? '' : ` · ease ${plan.ease.name}`)
+    );
 
     const result = await require('./recorder').run(plan, io);
 

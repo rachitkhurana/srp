@@ -202,7 +202,7 @@ async function run(plan, io) {
     if (dump) {
       fs.writeFileSync(
         path.join(plan.dumpFrames, 'frames.json'),
-        JSON.stringify({ segments: schedule.segments, frames: dump }, null, 2)
+        JSON.stringify({ ease: schedule.ease, segments: schedule.segments, runs: schedule.runs, frames: dump }, null, 2)
       );
       io.log(`  dumped ${dump.length} frames to ${plan.dumpFrames}`);
     }
