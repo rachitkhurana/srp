@@ -12,6 +12,28 @@ module.exports = {
   out: 'output/recipes.mp4',
   duration: 8,
 
+  // RECIPE: make the scroll look hand-driven instead of mechanical.
+  //
+  // A linear scroll starts and stops instantly, which is the single thing that
+  // reads as "a machine did this". A ramp fades up to speed over a fixed 1.5s,
+  // holds ONE constant speed, and fades back down over 1.5s. Same idea as a
+  // fade in a video.
+  //
+  // Fixed SECONDS, not a fraction of the run, so the motion feels the same on a
+  // 5 second scroll and a 40 second one. That is the difference from naming a
+  // curve (ease: 'power2.inOut'), which normalises the shape to whatever run it
+  // lands on and therefore never holds a speed at all on a long page.
+  //
+  // Easing applies per stretch of continuous motion and a hold ends a stretch,
+  // so this timeline fades down into each pause and up out of it with no extra
+  // work. Adjacent scroll steps with no hold between them are eased together as
+  // ONE movement, so the scroll does not stall at a waypoint; give a step its
+  // own `ease` when you want it timed separately.
+  //
+  // `--dry-run` prints each run's ramp lengths, cruise length and cruise speed.
+  ease: 'ramp',
+  // easeIn: 1.5,  easeOut: 1.5,   // the defaults, shown for the record
+
   before: async (page) => {
     // RECIPE: prepare the page before anything is measured.
     // `before` runs ahead of the settle wait, the warm-up pass AND the

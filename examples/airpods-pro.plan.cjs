@@ -1,5 +1,5 @@
 /*
- * apple.com/ae/airpods-pro. This is the recording in ../docs/demo.gif.
+ * apple.com/ae/airpods-pro. This is the recording in ../docs/airpods-pro.gif.
  *
  *   srp --plan examples/airpods-pro.plan.cjs --restart-animations
  *

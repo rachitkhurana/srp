@@ -14,12 +14,54 @@ const path = require('path');
 const { UsageError } = require('./errors');
 const { parseTarget, parsePause, selectorsOf } = require('./targets');
 const { OPTIONS, coerceOption } = require('./options');
+const { parseEase, parseRampLength, makeRamp, RAMP_DEFAULT_S } = require('./easing');
 
 const WHOLE_PAGE = { kind: 'percent', value: 100, align: 'top', offset: 0 };
 
 const camel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 
-const STEP_KEYS = ['scrollTo', 'hold', 'at', 'duration', 'action', 'actionAt', 'label', 'resolveAt'];
+const STEP_KEYS = ['scrollTo', 'hold', 'at', 'duration', 'ease', 'action', 'actionAt', 'label', 'resolveAt'];
+
+/** Step keys that exist only to be rejected with a pointed message. */
+const RESERVED_STEP_KEYS = ['resolveAt'];
+
+/**
+ * A step takes a curve, never a ramp: a ramp is defined in absolute seconds and
+ * belongs to a whole stretch of motion, not to one waypoint inside it.
+ */
+function parseStepEase(raw, at) {
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'ramp') {
+    throw new UsageError(`${at}.ease cannot be "ramp"; ramps are set once with --ease-in / --ease-out`);
+  }
+  return parseEase(raw);
+}
+
+/**
+ * Which easing model the run is on. Ramp mode is switched on by `--ease ramp`
+ * or by naming either ramp length; once on, the side you did not name takes the
+ * default and `0` is how you switch a side off.
+ */
+function resolveEase(merged) {
+  const inRaw = merged['ease-in'];
+  const outRaw = merged['ease-out'];
+  const wantsRamp = merged.ease === 'ramp' || inRaw != null || outRaw != null;
+
+  if (!wantsRamp) return parseEase(merged.ease);
+
+  if (merged.ease !== 'ramp' && merged.ease !== 'linear') {
+    throw new UsageError(
+      `--ease ${merged.ease} stretches one curve over the whole scroll, and --ease-in/--ease-out set ` +
+        'fixed ramps with a constant-speed middle. Pick one: drop --ease, or use --ease ramp.'
+    );
+  }
+  const dflt = `${RAMP_DEFAULT_S}s`;
+  return makeRamp({
+    inSpec: parseRampLength(inRaw == null ? dflt : inRaw, '--ease-in'),
+    outSpec: parseRampLength(outRaw == null ? dflt : outRaw, '--ease-out'),
+    shape: merged['ease-shape'] || 'smooth',
+    floorPx: merged['ease-floor'],
+  });
+}
 
 function normalizeStep(raw, i) {
   const at = `timeline[${i}]`;
@@ -32,7 +74,9 @@ function normalizeStep(raw, i) {
   if (raw.scrollTo !== undefined && raw.hold !== undefined) {
     throw new UsageError(`${at} cannot be both a scroll and a hold`);
   }
-  if (raw.resolveAt) throw new UsageError(`${at}.resolveAt is reserved and not yet supported`);
+  for (const k of RESERVED_STEP_KEYS) {
+    if (raw[k]) throw new UsageError(`${at}.${k} is reserved and not yet supported`);
+  }
 
   const common = {
     action: raw.action != null ? raw.action : null,
@@ -44,12 +88,17 @@ function normalizeStep(raw, i) {
       type: 'scroll',
       to: parseTarget(raw.scrollTo),
       duration: raw.duration == null ? null : raw.duration,
+      // null means "inherit the plan-wide --ease". A step that names its own
+      // curve also becomes its own easing run, so its declared duration is
+      // honoured exactly instead of being warped along with its neighbours.
+      ease: raw.ease == null ? null : parseStepEase(raw.ease, at),
       label: raw.label || `scroll to ${raw.scrollTo}`,
       ...common,
     };
   }
   if (raw.hold !== undefined) {
     if (raw.duration !== undefined) throw new UsageError(`${at} uses "hold" for its length; drop "duration"`);
+    if (raw.ease !== undefined) throw new UsageError(`${at} is a hold, which does not move; drop "ease"`);
     return {
       type: 'hold',
       at: raw.at != null ? parseTarget(raw.at) : null,
@@ -113,7 +162,7 @@ function build({ config, explicit = new Set(), planModule = null, scriptModule =
   } else {
     // The synthetic timeline the CLI form desugars into. `--pause` splits it in
     // schedule.expandPauses, once targets have pixel values.
-    timeline = [{ type: 'scroll', to: WHOLE_PAGE, duration: null, action: null, actionAt: 'start', label: 'scroll' }];
+    timeline = [{ type: 'scroll', to: WHOLE_PAGE, duration: null, ease: null, action: null, actionAt: 'start', label: 'scroll' }];
   }
 
   let before = planModule ? planModule.before || null : null;
@@ -141,6 +190,9 @@ function build({ config, explicit = new Set(), planModule = null, scriptModule =
 
     fixedDuration: Boolean(merged['fixed-duration']),
     scrollDurationS: merged.duration,
+    // The plan-wide easing, either a curve or a ramp profile. Steps that set
+    // their own curve override it.
+    ease: resolveEase(merged),
     // Whether the user actually asked for a duration, so the schedule can warn
     // when it turns out to be unused rather than silently discarding it.
     durationWasSet: explicit.has('duration') || (planModule ? planModule.duration !== undefined : false),
@@ -195,6 +247,7 @@ function validate(plan) {
     if (s.type === 'scroll') {
       if (!s.to) throw new UsageError(`${at}.scrollTo is required`);
       if (s.duration != null && !(s.duration > 0)) throw new UsageError(`${at}.duration must be greater than 0`);
+      if (s.ease != null && typeof s.ease.fn !== 'function') throw new UsageError(`${at}.ease is not a resolved curve`);
     } else if (s.type === 'hold') {
       if (!(s.duration > 0)) throw new UsageError(`${at}.hold must be a number of seconds greater than 0`);
     } else {
@@ -213,4 +266,7 @@ function validate(plan) {
   return plan;
 }
 
-module.exports = { build, fromConfig, collectTargets, collectSelectors, validate, WHOLE_PAGE, normalizeStep };
+module.exports = {
+  build, fromConfig, collectTargets, collectSelectors, validate,
+  WHOLE_PAGE, normalizeStep, STEP_KEYS, RESERVED_STEP_KEYS,
+};

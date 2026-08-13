@@ -99,7 +99,93 @@ test('step shapes are validated with a precise path', () => {
   assert.throws(mk([{ scrollTo: '50%', actionAt: 'middle' }]), /timeline\[0\]\.actionAt must be "start" or "end"/);
   assert.throws(mk([{ scrollTo: '50%', durtaion: 2 }]), /timeline\[0\] has unknown key: durtaion/);
   assert.throws(mk([{ scrollTo: '50%', resolveAt: 'runtime' }]), /reserved and not yet supported/);
+  assert.throws(mk([{ hold: 2, ease: 'sine.out' }]), /timeline\[0\] is a hold, which does not move; drop "ease"/);
+  assert.throws(mk([{ scrollTo: '50%', ease: 'bounce.out' }]), /--ease does not know "bounce.out"/);
   assert.throws(mk([]), /must be a non-empty array/);
+});
+
+test('--ease resolves to a curve, on the plan and per step', () => {
+  const flag = build(cfg(['--ease', 'power2.inOut']));
+  assert.equal(flag.ease.name, 'power2.inOut');
+  assert.equal(flag.ease.linear, false);
+  assert.equal(typeof flag.ease.fn, 'function');
+  assert.equal(flag.timeline[0].ease, null, 'the synthetic step inherits rather than overriding');
+
+  const dflt = build(cfg([]));
+  assert.equal(dflt.ease.name, 'linear');
+  assert.equal(dflt.ease.linear, true, 'so schedule.js can skip the easing path entirely');
+
+  const stepped = validate(build({ ...cfg([]), planModule: { timeline: [{ scrollTo: '100%', ease: 'sine.out' }] } }));
+  assert.equal(stepped.ease.name, 'linear');
+  assert.equal(stepped.timeline[0].ease.name, 'sine.out');
+});
+
+test('ramp mode: --ease ramp, or naming either side, and 1.5s fills the rest', () => {
+  const both = build(cfg(['--ease', 'ramp']));
+  assert.equal(both.ease.ramp, true);
+  assert.equal(both.ease.name, 'ramp 1.5s/1.5s smooth');
+
+  // Naming one side switches ramp mode on by itself; the other side defaults.
+  assert.equal(build(cfg(['--ease-in', '3'])).ease.name, 'ramp 3s/1.5s smooth');
+  assert.equal(build(cfg(['--ease-out', '4s'])).ease.name, 'ramp 1.5s/4s smooth');
+  assert.equal(build(cfg(['--ease', 'ramp', '--ease-in', '2', '--ease-out', '5'])).ease.name, 'ramp 2s/5s smooth');
+  assert.equal(build(cfg(['--ease-in', '10%'])).ease.name, 'ramp 10%/1.5s smooth');
+  assert.equal(build(cfg(['--ease', 'ramp', '--ease-shape', 'sine'])).ease.name, 'ramp 1.5s/1.5s sine');
+});
+
+test('--ease-shape takes a cubic-bezier as well as the named shapes', () => {
+  const p = build(cfg(['--ease-in', '0.5', '--ease-out', '0.5', '--ease-shape', 'cubic-bezier(.65,0,.25,.99)']));
+  assert.equal(p.ease.name, 'ramp 0.5s/0.5s cubic-bezier(0.65, 0, 0.25, 0.99)');
+  assert.ok(Math.abs(p.ease.shapeMean - 0.528) < 0.001, 'and it carries its own mean, not 0.5');
+
+  assert.throws(() => cfg(['--ease-shape', 'cubic-bezier(2,0,1,1)']), /x values must be between 0 and 1/);
+  assert.throws(() => cfg(['--ease-shape', 'cubic-bezier(.5,-0.6,.5,1)']), /would scroll backwards inside the ramp/);
+  assert.throws(() => cfg(['--ease-shape', 'cubic-bezier(0,0)']), /needs exactly 4 numbers/);
+});
+
+test('ramp mode: 0 switches a side off, and 0 on both sides is plain linear', () => {
+  assert.equal(build(cfg(['--ease-out', '0'])).ease.name, 'ramp 1.5s/0s smooth');
+  const off = build(cfg(['--ease-in', '0', '--ease-out', '0'])).ease;
+  assert.equal(off.linear, true, 'so the byte-identical default path is kept');
+  assert.equal(off.name, 'linear');
+});
+
+test('a curve and a ramp are different models, and combining them is refused', () => {
+  assert.throws(
+    () => build(cfg(['--ease', 'power2.inOut', '--ease-in', '1'])),
+    /--ease power2.inOut stretches one curve over the whole scroll.*Pick one: drop --ease, or use --ease ramp/s
+  );
+  // --ease linear is the default rather than a choice, so it does not conflict.
+  assert.equal(build(cfg(['--ease', 'linear', '--ease-in', '2'])).ease.name, 'ramp 2s/1.5s smooth');
+});
+
+test('a ramp is global, so a step cannot ask for one', () => {
+  assert.throws(
+    () => validate(build({ ...cfg([]), planModule: { timeline: [{ scrollTo: '100%', ease: 'ramp' }] } })),
+    /timeline\[0\]\.ease cannot be "ramp"; ramps are set once with --ease-in \/ --ease-out/
+  );
+});
+
+test('a plan file can set the ramp in camelCase, and flags still win', () => {
+  assert.equal(build({ ...cfg([]), planModule: { easeIn: '2', easeOut: '3' } }).ease.name, 'ramp 2s/3s smooth');
+  assert.equal(build({ ...cfg([]), planModule: { ease: 'ramp', easeShape: 'linear' } }).ease.name, 'ramp 1.5s/1.5s linear');
+  const won = build({ ...cfg(['--ease-in', '5']), planModule: { easeIn: '2' } });
+  assert.equal(won.ease.name, 'ramp 5s/1.5s smooth');
+});
+
+test('bad ramp lengths are rejected on the command line, not mid-render', () => {
+  // "=" form, because parseArgs reads a bare "-1" as another flag.
+  assert.throws(() => cfg(['--ease-in=-1']), /--ease-in must be a number of seconds/);
+  assert.throws(() => cfg(['--ease-out', '150%']), /--ease-out cannot be more than 100%/);
+  assert.throws(() => cfg(['--ease-shape', 'bouncy']), /--ease-shape must be one of linear \| smooth \| sine \| smoother \| smoothest/);
+  assert.throws(() => cfg(['--ease-floor=-1']), /--ease-floor must be 0 or greater/);
+});
+
+test('--ease accepts GSAP spellings and a cubic-bezier, and rejects nonsense', () => {
+  assert.equal(build(cfg(['--ease', 'POWER4.inout'])).ease.name, 'power4.inOut');
+  assert.equal(build(cfg(['--ease', 'cubic-bezier(.65,0,.35,1)'])).ease.name, 'cubic-bezier(0.65, 0, 0.35, 1)');
+  assert.throws(() => cfg(['--ease', 'quad.in']), /--ease does not know "quad.in"/);
+  assert.throws(() => cfg(['--ease', 'cubic-bezier(2,0,1,1)']), /x values must be between 0 and 1/);
 });
 
 test('a typo at the top level of a plan file is caught', () => {
@@ -112,4 +198,11 @@ test('plan-file values get the same coercion a flag would', () => {
   assert.equal(plan.viewport.width, 1922, 'forced even');
   assert.equal(plan.url, 'http://localhost:3000', 'normalised');
   assert.throws(() => build({ ...cfg([]), planModule: { fps: -1 } }), /--fps must be a positive number/);
+  assert.throws(() => build({ ...cfg([]), planModule: { ease: 'nope.in' } }), /--ease does not know "nope.in"/);
+});
+
+test('a plan file can set the ease, and a typed --ease still wins', () => {
+  assert.equal(build({ ...cfg([]), planModule: { ease: 'sine.inOut' } }).ease.name, 'sine.inOut');
+  const overridden = build({ ...cfg(['--ease', 'power3.out']), planModule: { ease: 'sine.inOut' } });
+  assert.equal(overridden.ease.name, 'power3.out');
 });

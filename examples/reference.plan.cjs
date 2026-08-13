@@ -34,6 +34,33 @@ module.exports = {
   //                                    // do not name their own duration
   // fixedDuration: true,           // make `duration` the hard total instead,
   //                                // compressing the scroll to fit the holds
+  ease: 'linear', // easing MODE. 'linear' (the default) is a
+  //                                // constant rate. 'ramp' fades up to speed,
+  //                                // cruises, and fades back down, which is
+  //                                // what you want on a long page. Or name a
+  //                                // curve ('power2.inOut') to stretch one
+  //                                // shape across the whole run instead, which
+  //                                // suits a short clip. See the README.
+  // easeIn: 2,                     // ramp up over 2s ('2', '2s' or '10%').
+  // easeOut: 4,                    // ramp back down over 4s. 0 turns a side
+  //                                // off. Naming either one implies
+  //                                // ease: 'ramp', and the side you leave out
+  //                                // defaults to 1.5s. Cannot be combined with
+  //                                // a curve: they are different models.
+  // easeShape: 'smooth',           // how pronounced the corners are, gentlest
+  //                                // to steepest: linear, smooth (default),
+  //                                // sine, smoother, smoothest, or a
+  //                                // 'cubic-bezier(.65,0,.25,.99)' to go
+  //                                // steeper still. Reach for this to make the
+  //                                // easing STRONGER; a longer ramp does not do
+  //                                // that. A bezier describes the VELOCITY
+  //                                // through the ramp, so it must not dip below
+  //                                // zero; above 1 overshoots the cruise speed
+  //                                // and settles back.
+  // easeFloor: 2,                  // least a ramp may move per frame. scrollTo
+  //                                // snaps to whole pixels, so anything under
+  //                                // 1px/frame visibly steps. 0 starts from a
+  //                                // dead stop and accepts the stepping.
 
   // ---- determinism (see the README section of the same name) ----
   clock: true, // false = --no-clock, record at wall-clock time
@@ -85,7 +112,7 @@ module.exports = {
    * TIMELINE
    * --------
    * Steps run in order. A step is either a scroll or a hold, never both.
-   * The seven keys are: scrollTo, hold, at, duration, action, actionAt, label.
+   * The eight keys: scrollTo, hold, at, duration, ease, action, actionAt, label.
    *
    * Targets (scrollTo, at) accept:
    *   40%              percent of the scrollable extent
@@ -104,6 +131,14 @@ module.exports = {
       //                              // other open-ended steps, in proportion
       //                              // to how far each one travels.
       //                              // If given, it must be greater than 0.
+      ease: 'power2.out', // optional, and only on a scroll step (a
+      //                              // hold does not move, so `ease` on one is
+      //                              // an error). Overrides the top-level
+      //                              // `ease` for this step, and makes the step
+      //                              // its own easing run: adjacent scroll
+      //                              // steps that both INHERIT the top-level
+      //                              // curve are eased together as one
+      //                              // continuous movement instead.
       label: 'into the features', // optional, shows in --dry-run and log lines
     },
     {

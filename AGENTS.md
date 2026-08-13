@@ -43,6 +43,17 @@ node bin/srp.js [url] [duration] […]    # without it
   --url <url>            bare host gets http://, a path becomes file://
   --duration <seconds>   scroll-motion seconds (-d). Pauses ADD to this
   --fixed-duration       make --duration the hard total instead
+  --ease <curve|ramp>    easing mode, default linear. "ramp" for fixed fades
+                         with a constant-speed middle, or a curve: GSAP names
+                         sine.*, power1..power4.* (.in / .out / .inOut),
+                         or cubic-bezier(x1,y1,x2,y2). Quote the parens
+  --ease-in <sec|%>      ramp up over this long, then cruise. Implies ramp mode
+  --ease-out <sec|%>     ramp back down over this long. 0 switches it off
+  --ease-shape <shape>   ramp corner shape, gentlest to steepest: linear,
+                         smooth (default), sine, smoother, smoothest, or a
+                         cubic-bezier(x1,y1,x2,y2) to go steeper still
+  --ease-floor <px>      least a ramp may move per frame, default 2. Below 1px
+                         the scroll visibly steps. 0 starts from a dead stop
   --out <file>           .mp4 gives H.264, .webm gives VP9 (-o)
   --fps <n>              default 60
   --width <px>           default 1920, forced even
@@ -94,6 +105,47 @@ distance, so a pause at 90% correctly gets a long first leg.
 
 A pause at `top` or `bottom` becomes a leading or trailing hold rather than splitting anything.
 
+## Workflow 2b: make the scroll look hand-driven
+
+**Reach for `--ease ramp` first.** It fades up to speed over a fixed 1.5s, holds one constant speed,
+and fades back down over 1.5s, which is how a video fade works and what almost everyone means by
+"make it natural".
+
+```bash
+srp https://site.com 40 --ease ramp --pause 40%:2
+srp https://site.com 40 --ease-in 2 --ease-out 4        # naming a side implies ramp mode
+```
+
+The ramp length is in **seconds, not a fraction of the run**, so a 40s scroll and a 5s scroll get the
+same 1.5s fade. The cruise speed comes out within a few percent of the plain average, which keeps
+`--duration` as the only thing that sets the pace.
+
+`--ease <curve>` is the other mode: one curve normalised across the whole run. Fine on a short clip,
+wrong on a long page, where it means the scroll is accelerating or decelerating the entire time and
+never holds a speed. The two modes cannot be combined and srp will refuse rather than pick one.
+
+Either way, easing warps time rather than distance, so determinism is untouched and the last frame
+still lands exactly on target. It applies to each stretch of continuous motion, and a hold ends a
+stretch, so with `--pause` each leg fades down into its pause and up out of it for free. Two adjacent
+scroll steps with no hold between them are eased **together** as one movement; give a step its own
+`ease` to time it separately, which makes it its own run.
+
+**To make the easing stronger, change the shape, not the length.** `--ease-shape smoother` or
+`smoothest`, or a `cubic-bezier(...)` to go steeper than either. A longer ramp does not sharpen the
+corners; it just spends more of the video winding up and down, and it makes the sub-pixel stepping
+worse. This is a mistake worth not making on the user's behalf: if they ask for "more ease", ask
+whether they mean stronger or longer before spending a render.
+
+`--dry-run` prints each run with its real numbers: ramp lengths, cruise length, cruise speed in px/s,
+and the floor it starts from. Read that before assuming. Three things it can tell you:
+
+- **"ramps scaled to Xs, no cruise"** means that leg is shorter than its ramps and is peaking at
+  twice its average. Give the step a longer `duration`.
+- **A warning about frames that "do not move a whole pixel"** means the scroll will visibly step.
+  The message names the fix that applies to that specific case; follow it rather than guessing.
+- **No `· from Npx/frame`** on a run means the floor could not be applied, because the leg is slower
+  than the floor to begin with. That leg will step, and the only fix is to give it less time.
+
 ## Workflow 3: do something mid-capture
 
 `--pause` holds cannot carry an action. The moment you need a click, you need a timeline:
@@ -120,9 +172,15 @@ Copy `examples/recipes.plan.cjs`; every pattern in it is annotated with why.
 1. `--dry-run` and read the segment table. Wrong frame counts or a `0px` extent are visible here.
 2. `--dump-frames output/frames` and read `frames.json`. Every entry carries the frame index, the
    scroll `y`, the page time `tMs`, the text of any `[data-srp-probe]` element, and the state of
-   every animation the page is running (name, timeline type, currentTime, playState).
-3. Compare the PNGs. Frames identical when they should move means the scroll is stuck; frames
-   changing during a hold is usually correct (time advances, scroll does not).
+   every animation the page is running (name, timeline type, currentTime, playState). The file also
+   carries the resolved `ease` and a `runs` array with each run's ramp lengths, cruise and speed.
+3. Compare the PNGs. Frames identical when they should move usually means the scroll is stuck, but
+   check `y` in `frames.json` first, because it can also mean the scroll moved less than a whole
+   pixel and got snapped away. That is expected in `--ease <curve>` mode, which cannot hold a
+   velocity floor: at 60fps over a 1760px page `power2.inOut` moves 0.004px between the first two
+   frames. In ramp mode it should NOT happen, since the floor holds every step at 2px by default, so
+   if it does, look for the warning explaining why the floor was disabled. Frames changing during a
+   hold is usually correct (time advances, scroll does not).
 4. Symptoms worth knowing:
    - **Footer clipped**: the page grew during capture. Raise `--wait`, or keep the warm-up on.
    - **Images popping in**: you passed `--no-warmup` on a lazy-loading page.
@@ -134,6 +192,9 @@ Copy `examples/recipes.plan.cjs`; every pattern in it is annotated with why.
      is wall-clock instead of frame-clock, so a light page at a low fps runs it slow instead.
    - **Something animates that nothing reports**: probably an animated GIF, `<marquee>`, or a
      sub-frame `setInterval`. See the limitations in the README; these are not fixable here.
+   - **The scroll stutters or steps**: it is moving less than a pixel per frame somewhere, and the
+     offset snaps to whole pixels. srp warns with a count and the fix. Most often the run is simply
+     too slow: shorten that step's `duration`. In ramp mode also check `--ease-floor` is not 0.
    - **A hold looks frozen solid**: expected if the page has nothing time-driven at that point.
 
 ## Workflow 5: a page that breaks under the faked clock
@@ -161,6 +222,7 @@ that list. Both entry points land on the same plan object, so there is one execu
 | `src/options.js` | The one option-spec table. Defaults, parsing and help are derived from it |
 | `src/targets.js` | Parsing scroll targets and pauses, resolving them to pixels. Pure |
 | `src/plan.js` | Flags plus a plan file, compiled into one normalised plan. Pure |
+| `src/easing.js` | Ease curves and ramp profiles, plus the cubic-bezier solver. Pure |
 | `src/schedule.js` | A plan plus page geometry, turned into an explicit frame list. Pure |
 | `src/loader.js` | Loading a user's CJS or ESM file |
 | `src/clock.js` | The deterministic clock, the frame stepper, the paint barrier |
@@ -208,6 +270,34 @@ by measurement against the installed Playwright, not from documentation.
   `<video>` and SVG SMIL. SMIL is the sneaky one: Blink runs it off its own time container and
   `document.getAnimations()` does not report it, so it slips past both WAAPI guards by never being
   seen at all.
+- **A ramp is resolved per run, a curve is not.** `--ease <curve>` is a pure normalised function and
+  can be evaluated anywhere. A ramp is defined in absolute seconds, so it only becomes a curve once
+  it knows the duration of the run it landed on: `schedule.js` calls `ease.curveFor(run.D)` once per
+  run and caches it as `run.curve`. That is why `warpInRun` reads `run.curve.fn` and not
+  `run.ease.fn`.
+- **A ramp shape's `mean` must equal its own `G(1)`, and both must come from one source.** The cruise
+  speed is `v = D / (T - (a+b)(1-F)(1-mean))` while position comes from `G`, so if the two disagree
+  the scroll silently lands short of or past its target. The five named shapes are symmetric about
+  their midpoints and so declare `mean: 0.5`, which is where the original hardcoded `/2` came from.
+  A user-supplied `cubic-bezier` need not be symmetric (`.65,0,.25,.99` integrates to 0.528), so its
+  `G` is a cumulative trapezoid table and its `mean` is read out of **that same table** as `G(1)`.
+  Never estimate the mean separately: consistency is what makes the numeric integral land exactly.
+  Drift-tested, so a new shape is checked automatically.
+- **`scrollTo` snaps to whole CSS pixels, and `deviceScaleFactor` does not change that.** Measured,
+  not assumed: 1, 2 and 3 all quantise identically, so rendering larger and downscaling is not a fix.
+  Anything moving slower than 1px per frame renders as a hold and then a jump. This is why a ramp
+  starts at `--ease-floor` px/frame rather than at zero, and why `--ease <curve>` mode judders at its
+  ends and cannot be fixed (a curve has no ramp region to hold a floor in). Do not "simplify" the
+  floor away because the schedule's `y` looks perfectly smooth: it is a float, and the browser is not.
+- **Easing warps time, not position, and `linear` must bypass it entirely.** A frame's position is
+  looked up by feeding warped time into the unchanged piecewise-linear position function. Easing each
+  segment's own progress instead would decelerate to a dead stop at every waypoint between two
+  adjacent scroll steps, which is the artifact the feature exists to remove. And `parseEase('linear')`
+  returns the literal identity so `schedule.js` can skip the easing path, keeping the default output
+  byte-identical: an algebraically-straight curve is not good enough, because the e2e pins the bytes.
+- **Every curve snaps its endpoints to exactly 0 and 1.** `Math.cos(Math.PI / 2)` is 6.12e-17, so
+  `sine.in(1)` computes to 0.9999999999999999 and the last frame would land short of the bottom of
+  the page. The wrapper in `easing.js` is what stops that; do not remove it as redundant.
 - **`schedule.js` and `targets.js` are pure and must stay pure.** They are the highest-value test
   surface: all the timing arithmetic is checkable without a browser, and `--dry-run` is just these
   two plus a printer.
@@ -240,5 +330,10 @@ For anything touching the capture path, also record the static fixture twice and
 files are byte-identical. For anything touching the clock or animations, record
 `test/fixtures/page.html` with `--dump-frames` and confirm `frames.json` shows the rAF probe and the
 CSS animation both advancing by exactly `1000/fps` per frame.
+
+For anything touching easing, the two checks that matter are both on `frames.json`: the last `y` must
+equal the segment's `y1` **exactly** (the whole feature is worthless if easing loses the target), and
+`Math.round(y)` must advance on every frame of a ramp (that is the judder fix, and it is invisible in
+the float `y`, which always looks perfectly smooth).
 
 Do not commit or push unless the user asks.
