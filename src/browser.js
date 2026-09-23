@@ -13,7 +13,18 @@ async function launch(plan) {
   const browser = await chromium.launch({ headless: plan.headless });
   const context = await browser.newContext({
     viewport: plan.viewport,
-    deviceScaleFactor: 1, // 1:1 pixels so the video is exactly viewport-sized
+    // 1 (the default) gives a video exactly the size of the viewport. Raising
+    // it emulates a retina device: the layout still happens in CSS pixels, so
+    // media queries, scroll targets and the schedule are untouched, but each
+    // captured frame comes out scale-times larger. That is the only way to
+    // record a real phone layout at a usable resolution, since the viewport
+    // has to stay small for the site to serve the phone layout at all.
+    deviceScaleFactor: plan.deviceScaleFactor,
+    // Cookies and localStorage from a previous signed-in session, so a page
+    // behind a login can be recorded. Omitted entirely when unset, because
+    // Playwright treats an explicit undefined the same as absent but a bad
+    // path here would fail much later than the option's own existence check.
+    ...(plan.storageState ? { storageState: plan.storageState } : {}),
   });
   const page = await context.newPage();
   return { browser, context, page };

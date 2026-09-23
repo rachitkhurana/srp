@@ -129,6 +129,31 @@ const OPTIONS = [
     coerce: even, help: 'viewport height (rounded to an even number)',
   },
   {
+    name: 'scale', group: 'Page', type: 'int', default: 1, meta: '<1-4>',
+    // Whole numbers only, so an even viewport stays even once multiplied and
+    // H.264 still accepts the frame. Scroll targets stay in CSS pixels, so
+    // nothing about the schedule or the easing changes.
+    coerce: (v) => {
+      if (v < 1 || v > 4) throw new UsageError(`--scale must be between 1 and 4 (got "${v}")`);
+      return v;
+    },
+    help: 'device pixel ratio; the video comes out width*scale by height*scale',
+  },
+  {
+    name: 'storage-state', group: 'Page', type: 'string', default: '', meta: '<file>',
+    // A Playwright storageState JSON: cookies plus localStorage. Recording a
+    // page that needs a login is otherwise impossible, since srp launches a
+    // clean context every run and there is nowhere to sign in. Produce one with
+    // hooks/login.cjs, which opens a headed browser and waits for you.
+    coerce: (v) => {
+      if (!v) return '';
+      const abs = path.resolve(process.cwd(), v);
+      if (!fs.existsSync(abs)) throw new UsageError(`--storage-state file not found: ${abs}`);
+      return abs;
+    },
+    help: 'Playwright storageState JSON to start the context signed in',
+  },
+  {
     name: 'wait', group: 'Page', type: 'number', default: 3, allowZero: true, meta: '<seconds>',
     help: 'settle time after page load, before capture',
   },

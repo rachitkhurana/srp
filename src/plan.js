@@ -181,6 +181,11 @@ function build({ config, explicit = new Set(), planModule = null, scriptModule =
     out: path.resolve(cwd, merged.out),
     fps: merged.fps,
     viewport: { width: merged.width, height: merged.height },
+    // Emulated device pixel ratio. The viewport stays in CSS pixels; only the
+    // captured frame gets bigger.
+    deviceScaleFactor: merged.scale,
+    // Absolute path to a storageState JSON, or '' for a clean context.
+    storageState: merged['storage-state'],
     headless: !merged.headed,
     waitS: merged.wait,
     warmup: merged.warmup,

@@ -465,6 +465,8 @@ If a page misbehaves with faked timers (a consent SDK that polls, a player that 
 | `--fps <n>` | `60` | Output frame rate (locked). |
 | `--width <px>` | `1920` | Viewport width (rounded to an even number). |
 | `--height <px>` | `1080` | Viewport height (rounded to an even number). |
+| `--scale <1-4>` | `1` | Device pixel ratio. The page still lays out in CSS pixels, so media queries and scroll targets are unaffected, but the video comes out `width*scale` by `height*scale`. Use it to record a phone layout (which needs a small viewport) at a usable resolution. |
+| `--storage-state <file>` | none | A Playwright `storageState` JSON (cookies + localStorage) to start the context with, so a page behind a login can be recorded. Produce one with `node hooks/login.cjs [url] [out.json]`, which opens a headed browser and waits for you to sign in. **The file is a live session** - `hooks/.auth/` is gitignored, keep it that way. |
 | `--wait <sec>` | `3` | Settle time after load, before capture. `0` is allowed. |
 | `--no-warmup` | *(off)* | Skip the pre-scroll that loads lazy content. Faster, but can clip footers. |
 | `--headed` | *(off)* | Show the browser window instead of running headless. |

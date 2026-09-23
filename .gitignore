@@ -17,3 +17,6 @@ hooks/*
 
 # os cruft
 .DS_Store
+
+# A captured storageState is a live session. Never commit one.
+hooks/.auth/
